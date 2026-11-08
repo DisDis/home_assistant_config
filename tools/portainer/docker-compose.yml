@@ -1,0 +1,27 @@
+name: tools-portainer
+
+services:
+  portainer:
+    image: portainer/portainer-ce:2.45.3
+    container_name: portainer
+    restart: unless-stopped
+    command:
+      - --admin-password-file
+      - /run/secrets/admin-password
+    ports:
+      - "${TOOLS_BIND_IP:-127.0.0.1}:9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+    secrets:
+      - source: admin-password
+        target: admin-password
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  admin-password:
+    file: ./secrets/admin-password

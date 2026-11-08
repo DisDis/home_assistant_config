@@ -1,0 +1,109 @@
+services:
+  # 1. Основной контейнер Home Assistant
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro # Доступ к DBus хоста
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    depends_on:
+      - mosquitto
+
+  # 2. MQTT Брокер (Mosquitto)
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:latest
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+
+  # 3. Zigbee2MQTT (пробросьте ваш стик cc2652)
+  zigbee2mqtt:
+    container_name: zigbee2mqtt
+    image: koenkk/zigbee2mqtt:latest
+    restart: unless-stopped
+    volumes:
+      - ./zigbee2mqtt-data:/app/data
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "8080:8080"
+    privileged: true
+    devices:
+      # Замените на ваш конкретный путь к стику (лучше использовать /dev/serial/by-id/...)
+      - ${ZIGBEE_ADAPTER_PATH:-/dev/ttyUSB0}:/dev/ttyUSB0
+    depends_on:
+      - mosquitto
+
+  # 4. Matter Server (для поддержки Matter-устройств)
+  matter-server:
+    container_name: matter-server
+    image: ghcr.io/home-assistant-libs/python-matter-server:stable
+    restart: unless-stopped
+    security_opt:
+      - apparmor:unconfined
+    privileged: true
+    network_mode: host
+    command:
+      - --storage-path
+      - /data
+      - --paa-root-cert-dir
+      - /data/credentials
+      - --ota-provider-dir
+      - /data/updates
+      - --primary-interface
+      - ${MATTER_PRIMARY_INTERFACE:-wlan0}
+      - --bluetooth-adapter
+      - "${MATTER_BLUETOOTH_ADAPTER:-0}"
+#    environment:
+      # Заглушка, запрещающая серверу паниковать из-за отсутствия wlan0
+      #- MATTERS_SERVER_DISABLE_WIFI_PROVISIONING=1 
+      #- OTBR_URL=http://localhost:8081
+    volumes:
+      - ./matter-data:/data
+      - /run/dbus:/run/dbus:ro
+      - /dev/bus/usb:/dev/bus/usb
+    # Мапим домен DCL на петлевой интерфейс, чтобы запросы падали мгновенно без таймаута:
+    extra_hosts:
+      - "on.dcl.csa-iot.org:127.0.0.1"
+
+  # 5. Cloud Commander отключён 2026-11-08: контейнер и образ удалены.
+  # cloud-commander:
+  #   container_name: cloud-commander
+  #   image: coderaiser/cloudcmd:latest
+  #   ports:
+  #     - "8001:8000"
+  #   environment:
+  #     CLOUDCMD_AUTH: "true"
+  #     CLOUDCMD_USERNAME: "${CLOUDCMD_USERNAME:?Set CLOUDCMD_USERNAME in .env}"
+  #     CLOUDCMD_PASSWORD: "${CLOUDCMD_PASSWORD:?Set CLOUDCMD_PASSWORD in .env}"
+  #   volumes:
+  #     - ./config:/root/config # Общий каталог конфигурации HA
+  #   restart: unless-stopped
+
+  # 6. HASS Configurator (File Editor)
+  hass-configurator:
+    container_name: hass-configurator
+    image: causticlab/hass-configurator-docker:latest
+    ports:
+      - "3218:3218"
+    environment:
+      HC_BASEPATH: /hass-config
+      HC_ENFORCE_BASEPATH: "true"
+      HC_USERNAME: "${HC_USERNAME:?Set HC_USERNAME in .env}"
+      HC_PASSWORD: "${HC_PASSWORD:?Set HC_PASSWORD in .env}"
+    volumes:
+      - ./hass-configurator-config:/config # Настройки самого редактора (settings.conf)
+      - ./config:/hass-config # Общий каталог конфигурации Home Assistant
+    restart: unless-stopped

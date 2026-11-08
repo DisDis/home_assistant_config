@@ -1,0 +1,8 @@
+# Copy to mosquitto/config/mosquitto.conf before starting the broker.
+# Create the password file locally with mosquitto_passwd; see ../readme.md.
+listener 1883
+allow_anonymous false
+password_file /mosquitto/config/passwd
+persistence true
+persistence_location /mosquitto/data/
+log_dest stdout
