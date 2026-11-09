@@ -31,6 +31,8 @@ services:
     container_name: hass-configurator
     image: ${HASS_CONFIGURATOR_IMAGE:-causticlab/hass-configurator-docker:0.6.0}
     restart: unless-stopped
+    # Configurator 0.6.0 handles SIGINT; deliver it directly to the application.
+    stop_signal: SIGINT
     ports:
       - "${PLUGINS_BIND_IP:-127.0.0.1}:${HASS_CONFIGURATOR_PORT:-3218}:3218"
     environment:
@@ -44,7 +46,10 @@ services:
       - |
         : "$${HC_USERNAME:?Set HC_USERNAME in plugins/.env}"
         : "$${HC_PASSWORD:?Set HC_PASSWORD in plugins/.env}"
-        exec /app/run.sh
+        if [ -f /config/settings.conf ]; then
+          exec hass-configurator /config/settings.conf
+        fi
+        exec hass-configurator
     volumes:
       - ./hass-configurator/data:/config
       - type: bind

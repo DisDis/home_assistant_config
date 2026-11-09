@@ -5,8 +5,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -159,6 +161,45 @@ class PluginTests(unittest.TestCase):
         env = dict(self.env, HC_USERNAME="admin")
         result = self.command(["/bin/sh", "-ec", script], success=False, env=env)
         self.assertIn("HC_PASSWORD", result.stderr)
+
+    def test_editor_receives_stop_signal_directly_and_preserves_settings_argument(self):
+        self.select(("hass-configurator",))
+        service = self.config()["services"]["hass-configurator"]
+        editor = self.bin / "hass-configurator"
+        editor.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, signal, sys
+signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+pathlib.Path(os.environ["EDITOR_READY"]).write_text(json.dumps({"pid": os.getpid(), "args": sys.argv[1:]}))
+while True:
+    signal.pause()
+''')
+        editor.chmod(0o755)
+        settings = self.root / "editor-settings.conf"
+        ready = self.root / "editor-ready.json"
+        for has_settings in (False, True):
+            with self.subTest(has_settings=has_settings):
+                ready.unlink(missing_ok=True)
+                if has_settings:
+                    settings.write_text("{}")
+                script = service["command"][0].replace("$$", "$").replace("/config/settings.conf", str(settings))
+                env = dict(self.env, HC_USERNAME="test-user", HC_PASSWORD="test-password", EDITOR_READY=str(ready))
+                process = subprocess.Popen([*service["entrypoint"], script], env=env,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 3
+                    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(ready.exists(), "editor did not start")
+                    state = json.loads(ready.read_text())
+                    self.assertEqual(state["pid"], process.pid, "shell must exec the application")
+                    self.assertEqual(state["args"], [str(settings)] if has_settings else [])
+                    process.send_signal(getattr(signal, service["stop_signal"]))
+                    stdout, stderr = process.communicate(timeout=3)
+                    self.assertEqual(process.returncode, 0, stdout + stderr)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
 
     def test_unknown_profile_fails_before_mutations(self):
         self.select(("misspelled",))
