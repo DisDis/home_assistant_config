@@ -16,6 +16,12 @@ id_ed25519
 *.pfx
 
 # Home Assistant, MQTT, Zigbee, Matter, and editor runtime state
+/homeassistant/config/
+/homeassistant/mosquitto/
+/homeassistant/zigbee2mqtt-data/
+/homeassistant/matter-data/
+/homeassistant/hass-configurator-config/
+# Keep legacy runtime directories ignored as well.
 /config/
 /mosquitto/
 /zigbee2mqtt-data/

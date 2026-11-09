@@ -20,7 +20,7 @@ Portainer и Cockpit используют HTTPS; при самоподписан
 
 Пароль первоначального администратора Portainer хранится только на сервере в `portainer/secrets/admin-password`. Учётные данные Kuma и адрес для мониторинга задаются локально в `.credentials.env`; используйте `.credentials.env.example` как пустой шаблон. Файлы с учётными данными должны иметь права `600`. Рабочие данные хранятся в `portainer/data/` и `uptime-kuma/data/`.
 
-Каждая утилита — независимый Compose-проект. Основной Compose Home Assistant в примерах находится в `/home/hauser/homeassistant`, инструменты — в `/home/hauser/tools`.
+Каждая утилита — независимый Compose-проект. Основной Compose в репозитории находится в [homeassistant/docker-compose.yml](../homeassistant/docker-compose.yml). На сервере в примерах основной стек размещён в `/home/hauser/homeassistant`, инструменты — в `/home/hauser/tools`.
 
 Автозапуск контейнеров и проверка после перезагрузки описаны в [основном README](../readme.md#автозапуск-после-перезагрузки). Скрипт `system/autostart.sh` запускает включённые проекты инструментов и проверяет их политики перезапуска; отключённая Kuma пропускается. Для ручного `docker compose` используйте `.env` в каталоге утилиты либо явно передавайте `--env-file /home/hauser/tools/.env`, если настройки хранятся в общем файле.
 

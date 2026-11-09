@@ -13,7 +13,15 @@ if [[ $# -gt 2 || ${1:-} == --help ]]; then
 fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-main_dir=${1:-$(dirname -- "$script_dir")}
+if [[ $# -ge 1 ]]; then
+  main_dir=$1
+elif [[ -f "$(dirname -- "$script_dir")/homeassistant/docker-compose.yml" ]]; then
+  # Repository layout: system/ and homeassistant/ are sibling directories.
+  main_dir=$(dirname -- "$script_dir")/homeassistant
+else
+  # Deployed layout: system/ is inside the main Compose directory.
+  main_dir=$(dirname -- "$script_dir")
+fi
 main_dir=$(cd -- "$main_dir" && pwd)
 if [[ $# -ge 2 ]]; then
   tools_dir=$2
