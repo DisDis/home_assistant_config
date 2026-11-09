@@ -8,8 +8,11 @@ plugins/
   .env
   zigbee2mqtt/
     README.md
-    data/                 # создаётся при запуске или переносится при миграции
+    data/                 # создаётся при запуске
   hass-configurator/
+    README.md
+    data/
+  matter-server/
     README.md
     data/
   yandex-smart-home/
@@ -20,16 +23,15 @@ plugins/
 
 ## Копирование и подготовка
 
-Для действующей установки сначала выполните [миграцию](#миграция-из-основного-compose), сохранив старый Compose до его замены.
-
 На компьютере из корня репозитория передайте публичные файлы:
 
 ```bash
-ssh hauser@192.0.2.10 'mkdir -p /home/hauser/plugins/yandex-smart-home /home/hauser/plugins/zigbee2mqtt /home/hauser/plugins/hass-configurator /home/hauser/homeassistant/system'
+ssh hauser@192.0.2.10 'mkdir -p /home/hauser/plugins/yandex-smart-home /home/hauser/plugins/zigbee2mqtt /home/hauser/plugins/hass-configurator /home/hauser/plugins/matter-server /home/hauser/homeassistant/system'
 scp plugins/docker-compose.yml plugins/.env.example plugins/README.md hauser@192.0.2.10:/home/hauser/plugins/
 scp plugins/yandex-smart-home/README.md hauser@192.0.2.10:/home/hauser/plugins/yandex-smart-home/
 scp plugins/zigbee2mqtt/README.md hauser@192.0.2.10:/home/hauser/plugins/zigbee2mqtt/
 scp plugins/hass-configurator/README.md hauser@192.0.2.10:/home/hauser/plugins/hass-configurator/
+scp plugins/matter-server/README.md hauser@192.0.2.10:/home/hauser/plugins/matter-server/
 scp system/plugins.sh system/plugins.py system/autostart.sh hauser@192.0.2.10:/home/hauser/homeassistant/system/
 ```
 
@@ -52,7 +54,11 @@ bash /home/hauser/homeassistant/system/plugins.sh validate /home/hauser/plugins
 | `COMPOSE_PROFILES=` | Ни одного |
 | `COMPOSE_PROFILES=zigbee2mqtt` | Zigbee2MQTT |
 | `COMPOSE_PROFILES=hass-configurator` | File Editor |
-| `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator` | Оба |
+| `COMPOSE_PROFILES=matter-server` | Matter Server |
+| `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator` | Zigbee2MQTT и File Editor |
+| `COMPOSE_PROFILES=zigbee2mqtt,matter-server` | Zigbee2MQTT и Matter Server |
+| `COMPOSE_PROFILES=hass-configurator,matter-server` | File Editor и Matter Server |
+| `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator,matter-server` | Все три |
 
 Профили — штатный механизм [Docker Compose](https://docs.docker.com/compose/how-tos/profiles/). Переменные окружения терминала имеют приоритет над `.env`; удалите старый экспорт `COMPOSE_PROFILES` через `unset COMPOSE_PROFILES`, если хотите использовать файл. Скрипт отклоняет неизвестные профили и `*`, чтобы опечатка не оставляла неожиданное состояние.
 
@@ -62,9 +68,10 @@ bash /home/hauser/homeassistant/system/plugins.sh validate /home/hauser/plugins
 | `HA_BACKEND_NETWORK` | Имя общей сети; одинаковое в основном стеке и плагинах, по умолчанию `ha-backend` |
 | `PLUGINS_BIND_IP` | Адрес веб-интерфейсов; `127.0.0.1` по умолчанию, для LAN укажите LAN IPv4 сервера |
 | `ZIGBEE2MQTT_PORT`, `HASS_CONFIGURATOR_PORT` | Порты хоста, по умолчанию `8080` и `3218` |
-| `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE` | Образы с выбранными версиями или digest |
+| `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE`, `MATTER_SERVER_IMAGE` | Образы с выбранными версиями или digest |
 | `ZIGBEE_ADAPTER_PATH` | Путь к координатору на хосте, желательно `/dev/serial/by-id/...`; нужен только Zigbee2MQTT |
 | `HC_USERNAME`, `HC_PASSWORD` | Логин и непустой пароль; нужны только включённому File Editor |
+| `MATTER_PRIMARY_INTERFACE`, `MATTER_BLUETOOTH_ADAPTER` | Интерфейс с IPv6 и индекс BlueZ для Matter; по умолчанию `wlan0`, `0` |
 
 Пароль заключайте в одинарные кавычки, чтобы `$` оставался буквальным символом. Рабочие `.env` и данные не публикуются. Скрипт не исполняет `.env` как shell-код и не выводит пароль. Для выключенного File Editor пароль не требуется; для выключенного Zigbee2MQTT координатор не требуется. Скрипт не знает названий плагинов, не проверяет пароли, координаторы или настройки приложений: пользователь заполняет их по инструкции плагина, а ошибки обнаруживают Docker и само приложение при запуске.
 
@@ -87,7 +94,7 @@ bash /home/hauser/homeassistant/system/plugins.sh check /home/hauser/plugins
 | `start` | Применить тот же выбор без скачивания образов; используется автозапуском |
 | `check` | Проверить состав контейнеров, состояние, политику перезапуска и Docker healthcheck, если он задан, без изменений |
 
-Чтобы отключить плагин, удалите его имя из `COMPOSE_PROFILES` и снова выполните `apply`. Для отключения всех оставьте пустое значение. Скрипт останавливает и удаляет контейнеры своего Compose-проекта по меткам Docker, включая сервисы, удалённые из Compose; одноразовые `docker compose run` пропускаются. Каталоги данных, тома и образы сохраняются. При пустом выборе скачивание и запуск пропускаются, включая отсутствие требования к общей сети и MQTT. Повторный `apply` безопасно применяет тот же выбор.
+Чтобы отключить плагин, удалите его имя из `COMPOSE_PROFILES` и снова выполните `apply`. Для отключения всех оставьте пустое значение. Скрипт останавливает и удаляет контейнеры своего Compose-проекта по меткам Docker, включая сервисы, удалённые из Compose; одноразовые `docker compose run` пропускаются. Каталоги данных, тома и образы сохраняются. При пустом выборе скачивание и запуск пропускаются, включая отсутствие требования к общей сети и MQTT. Повторный `apply` безопасно применяет тот же выбор. Порядок остановки, запуска и перезапуска HA вместе со всеми плагинами приведён в [основной инструкции](../readme.md#управление-всей-системой).
 
 Само редактирование `.env` не останавливает уже созданные контейнеры, в том числе после перезагрузки. Применяйте изменения скриптом до перезагрузки. Прямое указание сервиса в `docker compose up zigbee2mqtt` обходит выключенный профиль; используйте скрипт как точку запуска и обновления. File Editor дополнительно проверяет непустые учётные данные при старте самого контейнера.
 
@@ -99,7 +106,7 @@ Mosquitto создаёт сеть `ha-backend` в основном стеке. Z
 
 Для Zigbee2MQTT настройте `ZIGBEE_ADAPTER_PATH`, включите профиль и выполните `apply`. В контейнере координатор доступен как `/dev/ttyUSB0`. На новой установке откройте настроенный порт `8080`, пройдите [onboarding](https://www.zigbee2mqtt.io/guide/getting-started/#onboarding), задайте MQTT-адрес, учётные данные брокера и драйвер координатора, например `zstack`. Включите frontend на внутреннем порту `8080` и интеграцию Home Assistant. На действующей установке сохраните конфигурацию сети. Проброшенного устройства достаточно для доступа к координатору; полный `privileged` плагину не выдаётся.
 
-Каждый контейнерный плагин имеет свой каталог: [zigbee2mqtt/](zigbee2mqtt/README.md) и [hass-configurator/](hass-configurator/README.md). Данные Zigbee хранятся в `plugins/zigbee2mqtt/data/`, собственные настройки редактора — в `plugins/hass-configurator/data/`. Они монтируются в `/app/data` и `/config` соответственно. File Editor дополнительно открывает существующий `${HA_DIR}/config` в `/hass-config`; Docker откажет в запуске при отсутствии этого каталога и не создаст пустую копию. Для сохранения действующей Zigbee-сети перенесите старые данные по следующему разделу до первого запуска.
+Каждый контейнерный плагин имеет свой каталог: [zigbee2mqtt/](zigbee2mqtt/README.md) и [hass-configurator/](hass-configurator/README.md). Данные Zigbee хранятся в `plugins/zigbee2mqtt/data/`, собственные настройки редактора — в `plugins/hass-configurator/data/`. Они монтируются в `/app/data` и `/config` соответственно. File Editor дополнительно открывает существующий `${HA_DIR}/config` в `/hass-config`; Docker откажет в запуске при отсутствии этого каталога и не создаст пустую копию. Сохраняйте весь `data/` при резервном копировании и не создавайте новую Zigbee-сеть поверх существующей конфигурации.
 
 По умолчанию веб-интерфейсы слушают loopback. Для временного доступа используйте SSH-туннель, выполнив на компьютере:
 
@@ -109,68 +116,15 @@ ssh -L 8080:127.0.0.1:8080 -L 3218:127.0.0.1:3218 hauser@192.0.2.10
 
 После этого доступны `http://127.0.0.1:8080` и `http://127.0.0.1:3218`. Для постоянного доступа из LAN задайте `PLUGINS_BIND_IP`. При изменении портов хоста измените туннель и мониторы. File Editor использует HTTP с авторизацией.
 
-## Миграция из основного Compose
+## Matter Server
 
-Выполните этот раздел на сервере **до замены старого `homeassistant/docker-compose.yml`**. Если файл уже заменён, используйте сохранённую старую копию с прежним именем и каталогом проекта. Не используйте `down -v` или массовую очистку Docker. Контейнеры остаются остановленными до завершения переноса.
+[Инструкция Matter Server](matter-server/README.md) описывает включение профиля `matter-server`, подготовку сертификатов, сетевой интерфейс, Bluetooth, подключение интеграции в HA и обслуживание. Данные контроллера хранятся в `plugins/matter-server/data/` и входят в общий бэкап `plugins/`.
 
-1. Сохраните Compose, основной `.env` и данные плагинов. В примере оба каталога существуют; уберите отсутствующий каталог из команды `tar`, если этот плагин никогда не устанавливался.
-
-   ```bash
-   cd /home/hauser/homeassistant
-   umask 077
-   migration_backup="backups/plugins-$(date +%Y%m%d-%H%M%S)"
-   mkdir -p "$migration_backup"
-   cp -p docker-compose.yml "$migration_backup/docker-compose.yml"
-   [ ! -f .env ] || cp -p .env "$migration_backup/main.env"
-   docker compose stop --timeout 60 zigbee2mqtt hass-configurator
-   sudo tar -czf - zigbee2mqtt-data hass-configurator-config > "$migration_backup/plugin-data.tgz"
-   ```
-
-   Если копирование не удалось, верните старые контейнеры через `docker compose start zigbee2mqtt hass-configurator` и исправьте ошибку. Сохраняйте бэкап также на другом устройстве.
-
-2. Скопируйте публичные файлы плагинов и скрипты по инструкции выше. Создайте `plugins/.env`, перенесите прежние `ZIGBEE_ADAPTER_PATH`, `HC_USERNAME`, `HC_PASSWORD`, задайте `HA_DIR` и прежний LAN-адрес панелей при необходимости. Выберите профили явно: шаблон оставляет оба выключенными. Основной `.env` сохраните. Сверьте версии образов и при необходимости укажите текущие проверенные теги или digest: перенос данных лучше выполнять отдельно от обновления приложения.
-
-3. Скопируйте существующие данные с сохранением владельцев и прав в новые каталоги. Блок выполняется из старого основного каталога. Он сначала проверяет все назначения и отказывается копировать поверх существующих `data/`; отсутствующие старые каталоги пропускаются.
-
-   ```bash
-   cd /home/hauser/homeassistant
-   (
-     set -e
-     legacy_dirs=(zigbee2mqtt-data hass-configurator-config)
-     plugin_names=(zigbee2mqtt hass-configurator)
-     for i in "${!legacy_dirs[@]}"; do
-       if [ -d "${legacy_dirs[$i]}" ] && [ -e "/home/hauser/plugins/${plugin_names[$i]}/data" ]; then
-         echo "Target data directory already exists; inspect it before migration" >&2
-         exit 1
-       fi
-     done
-     for i in "${!legacy_dirs[@]}"; do
-       if [ -d "${legacy_dirs[$i]}" ]; then
-         mkdir -p "/home/hauser/plugins/${plugin_names[$i]}"
-         sudo cp -a -- "${legacy_dirs[$i]}" "/home/hauser/plugins/${plugin_names[$i]}/data"
-       fi
-     done
-   )
-   ```
-
-   При ошибке остановитесь и проверьте частично скопированные назначения. Не запускайте контейнер с пустым каталогом вместо действующей Zigbee-сети. Старые каталоги и бэкап пока сохраняются; после копирования сверяйте состав, размеры и контрольные суммы файлов, не выводя содержимое настроек и ключей.
-
-4. Через **старый** Compose удалите остановленные контейнеры, сохраняя данные:
-
-   ```bash
-   cd /home/hauser/homeassistant
-   docker compose rm -f zigbee2mqtt hass-configurator
-   ```
-
-5. Замените основной Compose новым. Убедитесь, что `HA_BACKEND_NETWORK` совпадает в двух `.env`. Выполните `docker compose config --quiet` и `docker compose up -d --no-deps mosquitto` в основном каталоге: брокер подключится к новой сети, MQTT-клиенты кратковременно потеряют соединение и должны переподключиться.
-
-6. Выполните `plugins.sh validate`, `plugins.sh apply`, затем `plugins.sh check` с путём `/home/hauser/plugins`. Проверьте прежние устройства, автоматизации и File Editor. Скрипт не присваивает контейнеры другого проекта и при конфликте имени предложит завершить миграцию.
-
-Для отката остановите и удалите новые контейнеры через их Compose, восстановите старый основной Compose и `.env`, затем выполните `docker compose up -d` в основном проекте. Он использует сохранённые старые каталоги. Если новые контейнеры уже изменяли настройки или сеть, восстановите согласованную копию данных и прежний образ: старые каталоги больше не синхронизируются с новыми автоматически. После успешной миграции делайте бэкапы новых `plugins/*/data/`; старые каталоги удаляйте отдельно после проверки и сохранения бэкапа.
+По умолчанию профиль выключен. Сервер использует сеть хоста и порт `5580`; `PLUGINS_BIND_IP` и переназначение портов веб-интерфейсов на него не действуют. Параметры Matter задаются в `plugins/.env`; основной Compose их не использует.
 
 ## Обновление и резервное копирование
 
-Шаблон фиксирует Zigbee2MQTT `2.14.3` и File Editor `0.6.0`; существование тегов проверяется по [релизам Zigbee2MQTT](https://github.com/Koenkk/zigbee2mqtt/releases) и [Docker Hub File Editor](https://hub.docker.com/r/causticlab/hass-configurator-docker/tags). Выбранные версии меняются в локальном `.env`, после проверки примечаний к релизу и резервного копирования. `plugins.sh apply` скачивает только выбранные плагины; не используйте `--profile '*' pull` в обслуживании. Ротация Docker-логов настроена на три файла по 10 МБ для каждого плагина.
+Шаблон фиксирует Zigbee2MQTT `2.14.3` и File Editor `0.6.0`; существование тегов проверяется по [релизам Zigbee2MQTT](https://github.com/Koenkk/zigbee2mqtt/releases) и [Docker Hub File Editor](https://hub.docker.com/r/causticlab/hass-configurator-docker/tags). Для Matter сохранён прежний образ с тегом `stable`, переопределяемый через `MATTER_SERVER_IMAGE`; этот тег меняется со временем. Версии и digest выбираются в локальном `.env` после проверки совместимости, примечаний к релизу и резервного копирования. `plugins.sh apply` скачивает только выбранные плагины; не используйте `--profile '*' pull` в обслуживании. Ротация Docker-логов настроена на три файла по 10 МБ для каждого плагина.
 
 Для бэкапа контейнерных плагинов достаточно сохранять весь `plugins/`: Compose, `.env`, инструкции и все `*/data/`. Остановите работающие контейнеры на время согласованной файловой копии. `--profile '*'` в команде **stop** охватывает все существующие профили и ничего не запускает и не скачивает:
 
@@ -223,4 +177,4 @@ bash /home/hauser/homeassistant/system/plugins.sh start /home/hauser/plugins
 
 7. Передайте на сервер обновлённые Compose и инструкцию. Дополните существующий `plugins/.env` новыми параметрами, добавьте `my-plugin` в `COMPOSE_PROFILES`, выполните `plugins.sh validate`, `apply`, `check`. `validate` проверяет только Compose и профили; работу приложения и связь с HA проверьте отдельно.
 
-8. Удалите профиль из `.env`, снова выполните `apply` и убедитесь, что контейнеры удалены, а `my-plugin/data/` сохранён. Повторное включение должно восстановить настройки. Проверьте сочетания с другими профилями. Общие локальные проверки: `python3 -m unittest discover -s tests -v`; они используют настоящий Compose и имитацию Docker daemon без скачивания образов. Тест с произвольным новым плагином подтверждает, что правки Python не нужны.
+8. Удалите профиль из `.env`, снова выполните `apply` и убедитесь, что контейнеры удалены, а `my-plugin/data/` сохранён. Повторное включение должно восстановить настройки. Проверяйте только изменённый сервис и затронутые команды; перебор сочетаний профилей не требуется. Общие локальные проверки: `python3 -m unittest discover -s tests -v`; они используют настоящий Compose и имитацию Docker daemon без скачивания образов. Тест с произвольным новым плагином подтверждает, что правки Python не нужны.

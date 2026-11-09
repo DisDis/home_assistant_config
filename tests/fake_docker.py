@@ -25,7 +25,7 @@ def container(target):
 
 
 if args[0] == "compose":
-    operations = {"config", "version", "pull", "up", "ps", "logs"}
+    operations = {"config", "version", "pull", "up", "stop", "ps", "logs"}
     index = next(i for i, arg in enumerate(args) if arg in operations)
     operation = args[index]
     if operation in ("config", "version"):
@@ -53,6 +53,13 @@ if args[0] == "compose":
                 "State": {"Running": True, "Status": "running"},
                 "HostConfig": {"RestartPolicy": {"Name": spec.get("restart", "no")}},
             }
+        save()
+    elif operation == "stop":
+        for c in state.values():
+            labels = c["Config"]["Labels"]
+            if (labels["com.docker.compose.project"] == config["name"]
+                    and labels["com.docker.compose.service"] in selected):
+                c["State"] = {"Running": False, "Status": "exited"}
         save()
     elif operation == "ps":
         for c in state.values():

@@ -31,37 +31,6 @@ services:
     networks:
       - ha-backend
 
-  # 3. Matter Server (для поддержки Matter-устройств)
-  matter-server:
-    container_name: matter-server
-    image: ghcr.io/home-assistant-libs/python-matter-server:stable
-    restart: unless-stopped
-    security_opt:
-      - apparmor:unconfined
-    privileged: true
-    network_mode: host
-    command:
-      - --storage-path
-      - /data
-      - --paa-root-cert-dir
-      - /data/credentials
-      - --ota-provider-dir
-      - /data/updates
-      - --primary-interface
-      - ${MATTER_PRIMARY_INTERFACE:-wlan0}
-      - --bluetooth-adapter
-      - "${MATTER_BLUETOOTH_ADAPTER:-0}"
-#    environment:
-      # Заглушка, запрещающая серверу паниковать из-за отсутствия wlan0
-      #- MATTERS_SERVER_DISABLE_WIFI_PROVISIONING=1 
-      #- OTBR_URL=http://localhost:8081
-    volumes:
-      - ./matter-data:/data
-      - /run/dbus:/run/dbus:ro
-      - /dev/bus/usb:/dev/bus/usb
-    # Мапим домен DCL на петлевой интерфейс, чтобы запросы падали мгновенно без таймаута:
-    extra_hosts:
-      - "on.dcl.csa-iot.org:127.0.0.1"
 
 networks:
   ha-backend:

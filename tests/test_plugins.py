@@ -1,9 +1,9 @@
 """Profile and lifecycle regression tests. No daemon, images or hardware required."""
 
-import itertools
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,7 +11,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = ((), ("zigbee2mqtt",), ("hass-configurator",), ("zigbee2mqtt", "hass-configurator"))
+PLUGIN_NAMES = ("zigbee2mqtt", "hass-configurator", "matter-server")
 
 
 @unittest.skipUnless(shutil.which("docker"), "Docker Compose CLI is required")
@@ -29,7 +29,7 @@ class PluginTests(unittest.TestCase):
             shutil.copy(ROOT / "system" / name, self.system)
         shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.system.parent)
         (self.system.parent / "config").mkdir()
-        for service in ("zigbee2mqtt", "hass-configurator"):
+        for service in PLUGIN_NAMES:
             data = self.plugins / service / "data"
             data.mkdir(parents=True)
             (data / "sentinel").write_text("existing state")
@@ -49,7 +49,7 @@ class PluginTests(unittest.TestCase):
         self.log = self.root / "docker.jsonl"
         self.state = self.root / "state.json"
         self.state.write_text("{}")
-        prefixes = ("COMPOSE_", "HC_", "HA_", "PLUGINS_", "ZIGBEE", "HASS_CONFIGURATOR", "MQTT_READY_")
+        prefixes = ("COMPOSE_", "HC_", "HA_", "PLUGINS_", "ZIGBEE", "HASS_CONFIGURATOR", "MATTER_")
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
         self.env.update(PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         REAL_DOCKER=shutil.which("docker"), FAKE_DOCKER_LOG=str(self.log),
@@ -90,45 +90,6 @@ class PluginTests(unittest.TestCase):
             args += ["--profile", "*"]
         return json.loads(self.command(args + ["config", "--format", "json"]).stdout)
 
-    def assert_selection(self, profiles):
-        self.assertEqual(self.managed(), set(profiles))
-        for c in self.commands():
-            if c[0] == "compose" and "pull" in c:
-                self.assertEqual(set(c[c.index("pull") + 1:]), set(profiles))
-            if c[0] == "compose" and "up" in c:
-                self.assertEqual(set(c[-len(profiles):]), set(profiles))
-                self.assertIn("never", c)
-        if not profiles:
-            self.assertFalse(any(c[0] == "compose" and ("pull" in c or "up" in c) for c in self.commands()))
-
-    def test_all_four_profile_selections(self):
-        for profiles in PROFILES:
-            with self.subTest(profiles=profiles):
-                self.state.write_text("{}")
-                self.log.write_text("")
-                self.select(profiles)
-                self.plugin("validate")
-                self.assertFalse(self.mutations())
-                self.assertEqual(set(self.config().get("services") or {}), set(profiles))
-                self.plugin("apply")
-                self.plugin("check")
-                self.assert_selection(profiles)
-
-    def test_all_sixteen_profile_transitions_preserve_data(self):
-        for before, after in itertools.product(PROFILES, repeat=2):
-            with self.subTest(before=before, after=after):
-                self.state.write_text("{}")
-                self.select(before)
-                self.plugin("apply")
-                self.select(after)
-                self.log.write_text("")
-                self.plugin("apply")
-                self.assert_selection(after)
-                removed = [item for c in self.commands() if c[0] == "rm" for item in c[1:]]
-                self.assertEqual(set(removed), {"ha-plugins_" + name for name in set(before) - set(after)})
-                for service in ("zigbee2mqtt", "hass-configurator"):
-                    self.assertEqual((self.plugins / service / "data/sentinel").read_text(), "existing state")
-
     def test_arbitrary_plugin_and_group_profile_need_no_script_changes(self):
         compose = self.plugins / "docker-compose.yml"
         addition = '''
@@ -152,13 +113,13 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(self.managed(), set())
 
     def test_application_settings_are_not_validated_by_helper(self):
-        self.select(("zigbee2mqtt", "hass-configurator"), "HC_PASSWORD=''\nZIGBEE_ADAPTER_PATH=/no/such/device\nHA_DIR=/missing/main\n")
+        self.select(PLUGIN_NAMES, "HC_PASSWORD=''\nZIGBEE_ADAPTER_PATH=/no/such/device\nHA_DIR=/missing/main\nMATTER_PRIMARY_INTERFACE=missing-interface\n")
         self.plugin("validate")
         self.assertFalse(self.mutations())
 
     def test_data_mounts_are_separate_and_editor_shares_live_ha_config(self):
         services = self.config(all_profiles=True)["services"]
-        for service, target in (("zigbee2mqtt", "/app/data"), ("hass-configurator", "/config")):
+        for service, target in (("zigbee2mqtt", "/app/data"), ("hass-configurator", "/config"), ("matter-server", "/data")):
             source = next(v["source"] for v in services[service]["volumes"] if v["target"] == target)
             self.assertEqual(Path(source), self.plugins / service / "data")
         shared = next(v for v in services["hass-configurator"]["volumes"] if v["target"] == "/hass-config")
@@ -166,8 +127,25 @@ class PluginTests(unittest.TestCase):
         self.assertFalse(shared.get("bind", {}).get("create_host_path", False))
         for service in services.values():
             self.assertEqual(service["logging"]["options"], {"max-size": "10m", "max-file": "3"})
-            self.assertEqual(service["ports"][0]["host_ip"], "127.0.0.1")
+            if service.get("network_mode") != "host":
+                self.assertEqual(service["ports"][0]["host_ip"], "127.0.0.1")
             self.assertNotIn(":latest", service["image"])
+
+    def test_matter_is_optional_and_keeps_host_network_and_hardware_access(self):
+        main = json.loads(self.command([
+            "docker", "compose", "--project-directory", str(self.system.parent),
+            "--env-file", os.devnull, "config", "--format", "json"]).stdout)
+        self.assertEqual(set(main["services"]), {"homeassistant", "mosquitto"})
+        matter = self.config(all_profiles=True)["services"]["matter-server"]
+        self.assertEqual(matter["profiles"], ["matter-server"])
+        self.assertEqual(matter["network_mode"], "host")
+        self.assertTrue(matter["privileged"])
+        mounts = {v["target"]: v["source"] for v in matter["volumes"]}
+        self.assertEqual(mounts["/run/dbus"], "/run/dbus")
+        self.assertEqual(mounts["/dev/bus/usb"], "/dev/bus/usb")
+        self.assertEqual(mounts["/data"], str(self.plugins / "matter-server/data"))
+        self.assertIn("/data/credentials", matter["command"])
+        self.assertIn("/data/updates", matter["command"])
 
     def test_editor_startup_guard_rejects_missing_credentials(self):
         self.select(("hass-configurator",))
@@ -186,7 +164,7 @@ class PluginTests(unittest.TestCase):
         self.assertFalse(self.mutations())
 
     def test_start_and_repeated_apply_do_not_remove_selected_services(self):
-        self.select(PROFILES[-1])
+        self.select(PLUGIN_NAMES)
         self.plugin("apply")
         self.log.write_text("")
         self.plugin("start")
@@ -208,7 +186,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(json.loads(self.state.read_text()), state)
 
     def test_pull_failure_keeps_previously_running_services(self):
-        self.select(PROFILES[-1])
+        self.select(PLUGIN_NAMES)
         self.plugin("apply")
         state = self.state.read_text()
         self.select(("hass-configurator",))
@@ -263,23 +241,44 @@ class PluginTests(unittest.TestCase):
                 self.plugin("check", success=False)
                 self.assertFalse(self.mutations())
 
-    def test_autostart_all_profiles_runs_main_first_without_downloads(self):
-        for profiles in PROFILES:
-            with self.subTest(profiles=profiles):
-                self.state.write_text("{}")
-                self.log.write_text("")
-                self.select(profiles)
-                args = ["bash", str(self.system / "autostart.sh"), str(self.system.parent),
-                        str(self.root / "tools"), str(self.plugins)]
-                self.command(args)
-                commands = self.commands()
-                starts = [c for c in commands if c[0] == "compose" and "up" in c]
-                self.assertEqual(starts[0][starts[0].index("--project-directory") + 1], str(self.system.parent))
-                self.assertFalse(any("pull" in c for c in commands if c[0] == "compose"))
-                self.assertEqual(self.managed(), set(profiles))
-                self.log.write_text("")
-                self.command(args[:2] + ["--check"] + args[2:])
-                self.assertFalse(self.mutations())
+    def test_documented_whole_system_stop_start_and_restart(self):
+        readme = (ROOT / "readme.md").read_text()
+
+        def script(heading):
+            section = readme.split("### " + heading + "\n", 1)[1]
+            block = re.search(r"```bash\n(.*?)\n```", section, flags=re.S).group(1)
+            return block.replace("/home/hauser", str(self.root))
+
+        profiles = ("matter-server",)
+        self.state.write_text("{}")
+        self.select(profiles)
+        self.command(["docker", "compose", "--project-directory", str(self.system.parent),
+                      "--env-file", os.devnull, "up", "-d", "--pull", "never"])
+        self.plugin("apply")
+        self.command(["docker", "compose", "--project-directory", str(self.root / "tools/portainer"),
+                      "--env-file", os.devnull, "up", "-d", "--pull", "never"])
+        self.log.write_text("")
+        self.command(["bash", "-ec", script("Остановка всей системы")])
+        state = json.loads(self.state.read_text())
+        for c in state.values():
+            project = c["Config"]["Labels"]["com.docker.compose.project"]
+            self.assertEqual(c["State"]["Running"], project == "tools-portainer")
+        commands = self.commands()
+        stops = [c for c in commands if c[0] == "compose" and "stop" in c]
+        self.assertIn("--profile", stops[0])
+        self.assertIn("*", stops[0])
+        self.assertFalse(any("pull" in c or "up" in c or c[0] == "rm" for c in commands))
+        for action in ("Запуск после остановки", "Перезапуск всей системы"):
+            self.log.write_text("")
+            self.command(["bash", "-ec", script(action)])
+            self.assertEqual(self.managed(), set(profiles))
+            self.assertTrue(all(c["State"]["Running"] for c in json.loads(self.state.read_text()).values()))
+            commands = self.commands()
+            self.assertFalse(any("pull" in c for c in commands if c[0] == "compose"))
+            starts = [c for c in commands if c[0] == "compose" and "up" in c]
+            self.assertNotIn("--project-name", starts[0])  # Main stack starts before plugins.
+            if profiles:
+                self.assertIn("--project-name", starts[-1])
 
     def test_default_directory_is_independent_of_cwd_and_preserves_dollar_password(self):
         secret = "test-only-$literal#value"

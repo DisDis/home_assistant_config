@@ -78,7 +78,7 @@ class Plugins:
                 labels = container.get("Config", {}).get("Labels") or {}
                 if (labels.get("com.docker.compose.project") != self.project
                         or labels.get("com.docker.compose.service") != service):
-                    raise PluginError(f"{service}: name is used by another project; follow the migration instructions")
+                    raise PluginError(f"{service}: name is used by another project; resolve the container_name conflict first")
         return managed
 
     @staticmethod

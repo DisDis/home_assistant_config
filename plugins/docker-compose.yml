@@ -54,6 +54,35 @@ services:
           create_host_path: false
     logging: *plugin-logging
 
+  matter-server:
+    profiles: [matter-server]
+    container_name: matter-server
+    image: ${MATTER_SERVER_IMAGE:-ghcr.io/home-assistant-libs/python-matter-server:stable}
+    restart: unless-stopped
+    security_opt:
+      - apparmor:unconfined
+    privileged: true
+    network_mode: host
+    command:
+      - --storage-path
+      - /data
+      - --paa-root-cert-dir
+      - /data/credentials
+      - --ota-provider-dir
+      - /data/updates
+      - --primary-interface
+      - ${MATTER_PRIMARY_INTERFACE:-wlan0}
+      - --bluetooth-adapter
+      - "${MATTER_BLUETOOTH_ADAPTER:-0}"
+    volumes:
+      - ./matter-server/data:/data
+      - /run/dbus:/run/dbus:ro
+      - /dev/bus/usb:/dev/bus/usb
+    logging: *plugin-logging
+    # Мапим домен DCL на петлевой интерфейс, чтобы запросы падали мгновенно без таймаута:
+    extra_hosts:
+      - "on.dcl.csa-iot.org:127.0.0.1"
+
 networks:
   ha-backend:
     external: true
