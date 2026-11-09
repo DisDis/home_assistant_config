@@ -4,6 +4,7 @@
 
 ## Оглавление
 
+- [Клонирование репозитория](#клонирование-репозитория)
 - [Сервер и локальная сеть](#сервер-и-локальная-сеть)
 - [Установка и настройка Docker](#установка-и-настройка-docker)
   - [Подготовка пакетов](#подготовка-пакетов)
@@ -12,7 +13,6 @@
   - [Настройка зеркал Docker Hub](#настройка-зеркал-docker-hub)
   - [Применение настроек и проверка](#применение-настроек-и-проверка)
 - [Подготовка и первый запуск](#подготовка-и-первый-запуск)
-  - [Копирование файлов на сервер](#копирование-файлов-на-сервер)
   - [Переменные основного стека](#переменные-основного-стека)
   - [Рабочие каталоги и Mosquitto](#рабочие-каталоги-и-mosquitto)
   - [Первый запуск сервисов](#первый-запуск-сервисов)
@@ -30,6 +30,36 @@
   - [Обновление существующей установки](#обновление-существующей-установки)
 - [Проверка перед публикацией](#проверка-перед-публикацией)
 
+## Клонирование репозитория
+
+Начните с клонирования всего [репозитория](https://github.com/DisDis/home_assistant_config) **на конечном устройстве**. Подключитесь к Raspberry Pi и установите Git, если его ещё нет:
+
+```bash
+ssh hauser@192.0.2.10
+sudo apt update
+sudo apt install git
+cd /home/hauser
+git clone https://github.com/DisDis/home_assistant_config
+cd home_assistant_config
+```
+
+Каталог `home_assistant_config/` — корень проекта. Сохраняйте структуру клона и настраивайте основной стек, плагины и инструменты внутри него:
+
+```text
+home_assistant_config/
+  readme.md
+  examples/
+  system/                 # общие команды управления
+  homeassistant/          # основной Compose, .env, config/ и mosquitto/
+  plugins/                # Compose плагинов, .env и каталоги */data/
+  tools/                  # Portainer, Cockpit и отключённая Uptime Kuma
+  tests/
+```
+
+В примерах корень проекта — `/home/hauser/home_assistant_config`; замените `/home/hauser` своим домашним каталогом. Далее команды выполняются в SSH-сеансе на Raspberry Pi. Сначала установите Docker по следующему разделу, затем настройте `homeassistant/`, нужные плагины и инструменты по их инструкциям. Compose запускайте из каталога соответствующего стека; скрипты управления находятся в корневом `system/`.
+
+Если клон и перенос данных уже выполнены, используйте существующий каталог и сохранённые `.env`, конфигурации и данные. Повторное клонирование и первоначальная настройка сетей не нужны; обновление описано в [разделе обслуживания](#обновление-существующей-установки).
+
 ## Сервер и локальная сеть
 
 Пример рассчитан на Raspberry Pi с Debian 13 (trixie), Docker Engine и Docker Compose. Home Assistant запускается как **Home Assistant Container**, без отдельного Supervisor.
@@ -37,7 +67,8 @@
 | Параметр | Пример |
 | --- | --- |
 | Имя хоста | `ha-server` |
-| Рабочий каталог на сервере | `/home/hauser/homeassistant` |
+| Корень проекта на сервере | `/home/hauser/home_assistant_config` |
+| Основной стек | `/home/hauser/home_assistant_config/homeassistant` |
 | SSH | `ssh hauser@192.0.2.10` |
 | Веб-интерфейс HA | <http://192.0.2.10:8123> |
 | Шлюз локальной сети | `192.0.2.1` |
@@ -46,7 +77,7 @@
 
 Это условные адреса для документации. Выберите реальные интерфейсы, маршруты и адреса своей сети; для Matter нужен IPv6 в локальной сети. Интерфейс Matter и индекс Bluetooth-адаптера задаются в `plugins/.env`.
 
-Локальная копия [homeassistant/docker-compose.yml](homeassistant/docker-compose.yml) сама по себе не меняет конфигурацию работающего сервера. Перед применением скопируйте её в свой рабочий каталог и проверьте параметры.
+Основной Compose находится в [homeassistant/docker-compose.yml](homeassistant/docker-compose.yml) внутри клона на сервере. Перед применением изменений проверьте его параметры и локальный `.env`.
 
 Zigbee2MQTT, File Editor и Matter Server вынесены в [plugins/](plugins/README.md) и по умолчанию отключены. File Editor использует встроенную авторизацию; HTTP-соединение не шифруется. Yandex Smart Home устанавливается через [HACS](plugins/yandex-smart-home/README.md). Cloud Commander в стек не входит, Uptime Kuma отключена. Для администрирования предусмотрены Portainer и Cockpit, подробнее в [tools/README.md](tools/README.md).
 
@@ -61,7 +92,7 @@ sudo apt update
 sudo apt install ca-certificates curl gnupg openssl nano python3
 ```
 
-Пакет `gnupg` нужен для `gpg`, `nano` — для редактирования локальных настроек, `openssl` — для создания пароля Portainer по инструкции инструментов, `python3` — для управления профилями плагинов (только стандартная библиотека). Команды SSH/SCP ниже предполагают, что SSH-сервер Raspberry Pi уже доступен.
+Пакет `gnupg` нужен для `gpg`, `nano` — для редактирования локальных настроек, `openssl` — для создания пароля Portainer по инструкции инструментов, `python3` — для управления профилями плагинов (только стандартная библиотека). SSH-сервер Raspberry Pi должен быть доступен до начала установки.
 
 ### Подключение репозитория и установка Docker
 
@@ -160,39 +191,14 @@ docker run --rm hello-world
 
 В репозитории хранятся публичные шаблоны. Рабочие `.env`, конфигурации интеграций, пароли, сертификаты и базы создаются на сервере по шагам ниже и исключены из Git. На существующей установке сохраните свои рабочие файлы и выполните только необходимые шаги; не создавайте новую Zigbee- или Matter-сеть поверх действующей.
 
-Основной стек находится в `homeassistant/`, контейнерные плагины — в `plugins/`, инструменты — в `tools/`: на сервере это соседние каталоги `/home/hauser/homeassistant`, `/home/hauser/plugins` и `/home/hauser/tools`. Каждый Compose-проект использует свой локальный `.env`. Для основной конфигурации нужен Docker Compose v2.27+; плагины также требуют Python 3.9+. Общая документация, примеры `examples/` и скрипты `system/` остаются в корне репозитория.
-
-### Копирование файлов на сервер
-
-Следующий блок выполняется **на компьютере, в корне репозитория**. Файлы из `homeassistant/` передаются непосредственно в каталог основного стека на сервере. Документация, примеры и скрипт автозапуска копируются туда отдельно.
-
-```bash
-ssh hauser@192.0.2.10 'mkdir -p /home/hauser/homeassistant/examples /home/hauser/homeassistant/system /home/hauser/plugins/yandex-smart-home /home/hauser/plugins/zigbee2mqtt /home/hauser/plugins/hass-configurator /home/hauser/plugins/matter-server'
-scp homeassistant/docker-compose.yml homeassistant/.env.example hauser@192.0.2.10:/home/hauser/homeassistant/
-scp .gitignore readme.md hauser@192.0.2.10:/home/hauser/homeassistant/
-scp examples/mosquitto.conf.example hauser@192.0.2.10:/home/hauser/homeassistant/examples/
-scp system/autostart.sh system/ha.sh system/plugins.sh system/plugins.py hauser@192.0.2.10:/home/hauser/homeassistant/system/
-scp plugins/docker-compose.yml plugins/.env.example plugins/README.md hauser@192.0.2.10:/home/hauser/plugins/
-scp plugins/yandex-smart-home/README.md hauser@192.0.2.10:/home/hauser/plugins/yandex-smart-home/
-scp plugins/zigbee2mqtt/README.md hauser@192.0.2.10:/home/hauser/plugins/zigbee2mqtt/
-scp plugins/hass-configurator/README.md hauser@192.0.2.10:/home/hauser/plugins/hass-configurator/
-scp plugins/matter-server/README.md hauser@192.0.2.10:/home/hauser/plugins/matter-server/
-```
-
-Далее подключитесь к Raspberry Pi:
-
-```bash
-ssh hauser@192.0.2.10
-```
-
-Остальные команды раздела выполняются **в SSH-сеансе на Raspberry Pi**. В примерах основной стек лежит в `/home/hauser/homeassistant`. Конфигурации инструментов копируются отдельно по [tools/README.md](tools/README.md#копирование-конфигурации-на-сервер).
+Используйте каталог, созданный при [клонировании репозитория](#клонирование-репозитория). Основной стек находится в `homeassistant/`, контейнерные плагины — в `plugins/`, инструменты — в `tools/`; это соседние каталоги внутри `home_assistant_config/`. Каждый Compose-проект использует свой локальный `.env`. Для основной конфигурации нужен Docker Compose v2.27+; плагины также требуют Python 3.9+. Общая документация, примеры `examples/` и скрипты `system/` находятся в корне проекта.
 
 ### Переменные основного стека
 
-Создайте `.env` из существующего в репозитории [homeassistant/.env.example](homeassistant/.env.example). После копирования на сервер оба файла находятся в каталоге основного стека. Команда сохраняет уже существующий `.env`:
+Создайте `.env` из существующего в репозитории [homeassistant/.env.example](homeassistant/.env.example). Оба файла находятся в `homeassistant/` внутри клона на сервере. Команда сохраняет уже существующий `.env`:
 
 ```bash
-cd /home/hauser/homeassistant
+cd /home/hauser/home_assistant_config/homeassistant
 [ -e .env ] || (umask 077; cp .env.example .env)
 chmod 600 .env
 nano .env
@@ -211,16 +217,18 @@ nano .env
 Команды выполняются на сервере из каталога основного стека. Файл `mosquitto.conf` создаётся из [публичного шаблона](examples/mosquitto.conf.example); существующая конфигурация сохраняется:
 
 ```bash
-cd /home/hauser/homeassistant
+cd /home/hauser/home_assistant_config/homeassistant
 mkdir -p config
 mkdir -p mosquitto/config mosquitto/data mosquitto/log
-[ -e mosquitto/config/mosquitto.conf ] || cp examples/mosquitto.conf.example mosquitto/config/mosquitto.conf
+[ -e mosquitto/config/mosquitto.conf ] || cp ../examples/mosquitto.conf.example mosquitto/config/mosquitto.conf
 ```
+
+Каталоги `plugins/zigbee2mqtt/data/`, `plugins/hass-configurator/data/` и `plugins/matter-server/data/` также должны существовать до запуска плагинов. Они входят в клон благодаря пустым файлам `.stub`; рабочие данные внутри них игнорируются Git. Для подготовки существующего клона используйте [команду `mkdir -p` из инструкции плагинов](plugins/README.md#подготовка-в-клоне-репозитория). Настройте выбранные плагины перед их включением. У Yandex Smart Home отдельного `data/` нет: компонент и его настройки хранятся в конфигурации HA.
 
 На **новой установке** создайте пользователя MQTT, например `mqttuser`. Следующая команда спросит пароль интерактивно; используйте его позже в Zigbee2MQTT и интеграции MQTT Home Assistant. Параметр `-c` создаёт новый файл паролей, поэтому команда выполняется только при его отсутствии:
 
 ```bash
-cd /home/hauser/homeassistant
+cd /home/hauser/home_assistant_config/homeassistant
 if [ ! -e mosquitto/config/passwd ]; then
   docker compose run --rm --no-deps --user 0:0 mosquitto mosquitto_passwd -c /mosquitto/config/passwd mqttuser
 fi
@@ -235,7 +243,7 @@ sudo chmod 600 mosquitto/config/passwd
 На сервере сначала проверьте Compose и запустите брокер и HA:
 
 ```bash
-cd /home/hauser/homeassistant
+cd /home/hauser/home_assistant_config/homeassistant
 docker compose config --quiet
 docker compose up -d mosquitto homeassistant
 docker compose ps
@@ -300,7 +308,7 @@ HA подключается к `ws://localhost:5580/ws`: оба контейне
 
 ## Хранение данных
 
-Пути слева указаны относительно `/home/hauser` на Raspberry Pi. Данные каждого контейнерного плагина находятся в его собственной папке внутри `plugins/`.
+Пути слева указаны относительно корня проекта `/home/hauser/home_assistant_config` на Raspberry Pi. Данные каждого контейнерного плагина находятся в его собственной папке внутри `plugins/`.
 
 | Каталог на хосте | Каталог в контейнере | Содержимое |
 | --- | --- | --- |
@@ -330,16 +338,16 @@ HA и Zigbee2MQTT получают часовой пояс хоста через
 
 ## Инструменты сервера
 
-Конфигурации инструментов хранятся отдельно в [tools/README.md](tools/README.md). Для них используется пример каталога `/home/hauser/tools`: Portainer CE в собственном Compose-проекте и Cockpit как пакет Debian. Compose Uptime Kuma сохранён с закомментированным сервисом. Инструкция описывает копирование шаблонов, создание локальных файлов, настройку адресов панелей, включение мониторинга, обновление и резервное копирование. Пароли и рабочие базы в Git не сохраняются.
+Конфигурации инструментов хранятся отдельно в [tools/README.md](tools/README.md). Для них используется пример каталога `/home/hauser/home_assistant_config/tools`: Portainer CE в собственном Compose-проекте и Cockpit как пакет Debian. Compose Uptime Kuma сохранён с закомментированным сервисом. Инструкция описывает настройку шаблонов из клона, создание локальных файлов, настройку адресов панелей, включение мониторинга, обновление и резервное копирование. Пароли и рабочие базы в Git не сохраняются.
 
 ## Управление всей системой
 
-Единый скрипт [system/ha.sh](system/ha.sh) управляет Home Assistant, Mosquitto и контейнерными плагинами. Выполняйте команды на сервере после первоначальной настройки и скачивания образов. В примере скрипты находятся в `/home/hauser/homeassistant/system/`. В клоне репозитория используйте `bash system/ha.sh start` из корня либо абсолютный путь к скрипту; рабочий каталог терминала на выбор конфигурации не влияет.
+Единый скрипт [system/ha.sh](system/ha.sh) управляет Home Assistant, Mosquitto и контейнерными плагинами. Выполняйте команды на сервере после первоначальной настройки и скачивания образов. В примере скрипты находятся в `/home/hauser/home_assistant_config/system/`. Используйте `bash system/ha.sh start` из корня проекта либо абсолютный путь к скрипту; рабочий каталог терминала на выбор конфигурации не влияет.
 
 ### Остановка всей системы
 
 ```bash
-bash /home/hauser/homeassistant/system/ha.sh stop
+bash /home/hauser/home_assistant_config/system/ha.sh stop
 ```
 
 Сначала останавливаются контейнеры проекта плагинов, затем HA и Mosquitto. Останавливаются также оставшиеся контейнеры отключённых или удалённых из Compose сервисов своего проекта; одноразовые `docker compose run` пропускаются. Контейнеры, данные и образы сохраняются. При `restart: unless-stopped` вручную остановленные контейнеры остаются остановленными после перезагрузки хоста.
@@ -347,15 +355,15 @@ bash /home/hauser/homeassistant/system/ha.sh stop
 ### Запуск после остановки
 
 ```bash
-bash /home/hauser/homeassistant/system/ha.sh start
+bash /home/hauser/home_assistant_config/system/ha.sh start
 ```
 
-Сначала запускаются HA и Mosquitto, затем плагины из текущего `plugins/.env`. Скрипт использует `plugins.sh start`: оставшиеся отключённые контейнеры удаляются с сохранением данных, выбранные запускаются. Образы не скачиваются и не обновляются. Для впервые включённого плагина без скачанного образа выполните `plugins.sh apply /home/hauser/plugins` при работающем основном стеке; загрузка образов относится к установке и обновлению.
+Сначала запускаются HA и Mosquitto, затем плагины из текущего `plugins/.env`. Скрипт использует `plugins.sh start`: оставшиеся отключённые контейнеры удаляются с сохранением данных, выбранные запускаются. Образы не скачиваются и не обновляются. Для впервые включённого плагина без скачанного образа выполните `plugins.sh apply /home/hauser/home_assistant_config/plugins` при работающем основном стеке; загрузка образов относится к установке и обновлению.
 
 ### Перезапуск всей системы
 
 ```bash
-bash /home/hauser/homeassistant/system/ha.sh restart
+bash /home/hauser/home_assistant_config/system/ha.sh restart
 ```
 
 Скрипт останавливает плагины, затем основной стек, после чего запускает основной стек и выбранные плагины. Используется `docker compose up`, поэтому изменения Compose и `.env` применяются. Обычный `docker compose restart` не перечитывает настройки Compose и не применяет выбор новых профилей.
@@ -363,16 +371,16 @@ bash /home/hauser/homeassistant/system/ha.sh restart
 ### Проверка и расположение каталогов
 
 ```bash
-bash /home/hauser/homeassistant/system/ha.sh check
+bash /home/hauser/home_assistant_config/system/ha.sh check
 ```
 
 `check` проверяет состояние основного стека и выбранных плагинов без изменений. Состав плагинов читается из Compose; имена приложений и проверки их настроек в управляющем скрипте не задаются. Локальный `.env` каждого проекта читается явно. Перед запуском, остановкой и перезапуском проверяется разбор обоих Compose; при ошибке команда завершается с ненулевым кодом. При частичном сбое запуска уже запущенные сервисы продолжают работать: исправьте причину и повторите `start`.
 
-Пути определяются относительно расположения скрипта: `system/` в корне репозитория либо `homeassistant/system/` на сервере. Для другого размещения передайте основной каталог и каталог плагинов явно:
+Пути определяются относительно `system/` в корне клона; по умолчанию выбираются соседние `homeassistant/` и `plugins/`. Для другого размещения передайте основной каталог и каталог плагинов явно:
 
 ```bash
-bash /home/hauser/homeassistant/system/ha.sh restart /home/hauser/homeassistant /home/hauser/plugins
-bash /home/hauser/homeassistant/system/ha.sh --help
+bash /home/hauser/home_assistant_config/system/ha.sh restart /home/hauser/home_assistant_config/homeassistant /home/hauser/home_assistant_config/plugins
+bash /home/hauser/home_assistant_config/system/ha.sh --help
 ```
 
 Скрипт требует работающий Docker и не изменяет системные службы. Portainer, Uptime Kuma и Cockpit обслуживаются отдельно по [инструкции инструментов](tools/README.md). Подготовка автозапуска Docker и проверка инструментов выполняются через `autostart.sh` из следующего раздела.
@@ -384,18 +392,18 @@ bash /home/hauser/homeassistant/system/ha.sh --help
 После подготовки данных, настройки выбранных плагинов и загрузки образов основного стека и инструментов выполните на сервере:
 
 ```bash
-bash /home/hauser/homeassistant/system/plugins.sh apply /home/hauser/plugins
-bash /home/hauser/homeassistant/system/autostart.sh /home/hauser/homeassistant /home/hauser/tools /home/hauser/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh apply /home/hauser/home_assistant_config/plugins
+bash /home/hauser/home_assistant_config/system/autostart.sh /home/hauser/home_assistant_config/homeassistant /home/hauser/home_assistant_config/tools /home/hauser/home_assistant_config/plugins
 ```
 
 [system/autostart.sh](system/autostart.sh) сначала проверяет все Compose и выбор профилей плагинов. Затем при необходимости включает службы Docker через `sudo`, вызывает `ha.sh start` для HA и выбранных плагинов, запускает инструменты с `--pull never` и проверяет состояние контейнеров. Режим `--check` использует `ha.sh check` и отдельно проверяет инструменты. Подключение к MQTT и параметры приложений настраиваются самими пользователями; в Python нет привязки к отдельным плагинам. Пустая Kuma пропускается. Обновлений и скачивания образов автозапуск не выполняет; первый запуск и обновления плагинов делаются через `plugins.sh apply` при уже работающем основном стеке.
 
-Первые два аргумента остались совместимы с прежней командой, третий задаёт каталог плагинов. Без аргументов в репозитории выбираются соседние `homeassistant/`, `tools/`, `plugins/`; при копировании в `homeassistant/system/` — основной каталог и соседние `tools/`, `plugins/`. Проекты инструментов используют свой `.env` либо общий `tools/.env`; плагины используют только `plugins/.env`. Скрипты `ha.sh`, `plugins.sh` и `plugins.py` нужно копировать вместе с `autostart.sh`. Python 3.9+ обязателен.
+Аргументы задают каталоги основного стека, инструментов и плагинов. Без аргументов выбираются соседние с `system/` каталоги `homeassistant/`, `tools/`, `plugins/` внутри клона. Проекты инструментов используют свой `.env` либо общий `tools/.env`; плагины используют только `plugins/.env`. Все скрипты уже находятся в `system/` после клонирования. Python 3.9+ обязателен.
 
 Проверка без изменений:
 
 ```bash
-bash /home/hauser/homeassistant/system/autostart.sh --check /home/hauser/homeassistant /home/hauser/tools /home/hauser/plugins
+bash /home/hauser/home_assistant_config/system/autostart.sh --check /home/hauser/home_assistant_config/homeassistant /home/hauser/home_assistant_config/tools /home/hauser/home_assistant_config/plugins
 systemctl is-enabled docker.service containerd.service
 systemctl is-active docker.service containerd.service
 docker ps --format 'table {{.Names}}\t{{.Status}}'
@@ -411,31 +419,39 @@ docker ps --format 'table {{.Names}}\t{{.Status}}'
 
 ```bash
 ssh hauser@192.0.2.10
-cd /home/hauser/homeassistant
+cd /home/hauser/home_assistant_config/homeassistant
 docker compose ps
 docker compose config --quiet
 docker compose logs --tail 100 homeassistant
 docker compose logs --tail 100 mosquitto
-cd /home/hauser/plugins
+cd /home/hauser/home_assistant_config/plugins
 docker compose logs --tail 100
-bash /home/hauser/homeassistant/system/plugins.sh check /home/hauser/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh check /home/hauser/home_assistant_config/plugins
 ```
 
 Для резервного копирования Matter нужно сохранять весь каталог `plugins/matter-server/data/`; согласованный снимок следует делать при остановленном Matter Server. Каталог `backups/` содержит приватные данные Matter-сети и доступен владельцу. PIN-коды Matter, MQTT-пароли и содержимое приватных ключей в README не сохраняются.
 
 ### Обновление существующей установки
 
-С компьютера передавайте только публичные файлы командами из [раздела копирования](#копирование-файлов-на-сервер) и [инструкции инструментов](tools/README.md#копирование-конфигурации-на-сервер). Не копируйте поверх сервера локальные `.env`, `config/`, `mosquitto/`, `plugins/*/data/`, `data/`, `secrets/` и настройки Cockpit. Перед заменой Compose сохраните прежние файлы в приватном `backups/` на сервере.
+Обновляйте существующий клон на Raspberry Pi. Перед обновлением сохраните прежние Compose-файлы и локальные изменения отслеживаемых файлов в приватном `backups/` на сервере; затем проверьте состояние Git и получите изменения:
 
-Проверьте серверные `.env`: общая сеть — в основном стеке; профили, параметры Matter, путь Zigbee, адреса плагинов и пароль редактора — в `plugins/.env`; адрес инструментов — в их `.env`. Compose автоматически читает `.env` из каталога проекта; общий `/home/hauser/tools/.env` для ручных команд указывайте через `--env-file` либо один раз скопируйте в `portainer/.env`, если его ещё нет. Существующий файл не перезаписывайте.
+```bash
+cd /home/hauser/home_assistant_config
+git status --short
+git pull --ff-only
+```
+
+Если есть локальные изменения отслеживаемых файлов, сначала сохраните и согласуйте их с новой версией; при ошибке `git pull` остановитесь и разберите причину. Не используйте `git reset --hard` или `git clean` для обновления рабочей установки. Локальные `.env`, `homeassistant/config/`, `homeassistant/mosquitto/`, данные плагинов и инструментов, секреты и настройки Cockpit исключены из Git и остаются на сервере. После обновления сверьте свои `.env` с шаблонами и инструкции выбранных плагинов; существующие рабочие файлы не перезаписывайте.
+
+Проверьте серверные `.env`: общая сеть — в основном стеке; профили, параметры Matter, путь Zigbee, адреса плагинов и пароль редактора — в `plugins/.env`; адрес инструментов — в их `.env`. Compose автоматически читает `.env` из каталога проекта; общий `/home/hauser/home_assistant_config/tools/.env` для ручных команд указывайте через `--env-file` либо один раз скопируйте в `portainer/.env`, если его ещё нет. Существующий файл не перезаписывайте.
 
 В SSH-сеансе проверьте конфигурации и загрузите образы, пока сервисы ещё работают:
 
 ```bash
-cd /home/hauser/homeassistant
+cd /home/hauser/home_assistant_config/homeassistant
 docker compose config --quiet
 docker compose pull
-cd /home/hauser/tools/portainer
+cd /home/hauser/home_assistant_config/tools/portainer
 if [ ! -e .env ] && [ -f ../.env ]; then
   (umask 077; cp ../.env .env)
 fi
@@ -448,19 +464,27 @@ docker compose pull
 Затем примените Compose, пересоздайте контейнеры с сохранением подключённых каталогов и проверьте автозапуск:
 
 ```bash
-cd /home/hauser/homeassistant
+cd /home/hauser/home_assistant_config/homeassistant
 docker compose up -d --pull never --force-recreate
-cd /home/hauser/tools/portainer
+cd /home/hauser/home_assistant_config/tools/portainer
 docker compose up -d --pull never --force-recreate
-bash /home/hauser/homeassistant/system/plugins.sh apply /home/hauser/plugins
-bash /home/hauser/homeassistant/system/autostart.sh /home/hauser/homeassistant /home/hauser/tools /home/hauser/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh apply /home/hauser/home_assistant_config/plugins
+bash /home/hauser/home_assistant_config/system/autostart.sh /home/hauser/home_assistant_config/homeassistant /home/hauser/home_assistant_config/tools /home/hauser/home_assistant_config/plugins
 ```
 
 Проверьте HA (`8123`), Portainer (`9443/api/status`), MQTT (`1883`). Для включённых плагинов проверьте Matter (`5580`) и настроенные адреса Zigbee2MQTT (по умолчанию `8080`) и File Editor (`3218`, без входа ожидается `401`); отключённые плагины проверять не нужно. Сверьте журналы с состоянием до обновления и убедитесь, что прежние интеграции и устройства доступны. Данные контейнерных плагинов сохраняются в `plugins/*/data/`, данные HA — в основном стеке; для отката после изменения формата данных могут понадобиться и прежние образы, и резервная копия. Старые образы не удаляйте до окончания проверки.
 
+Если менялось размещение проекта, после пересоздания проверьте фактические монтирования каждого включённого контейнера, например:
+
+```bash
+docker inspect --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' homeassistant
+```
+
+Перенос файлов не меняет пути уже созданных контейнеров. Рабочие данные HA, MQTT, плагинов и Portainer должны подключаться из соответствующих каталогов внутри `home_assistant_config/`; системные монтирования `/run/dbus`, `/etc/localtime`, USB и Docker-сокета остаются путями хоста. Не запускайте новую копию приложения с пустым хранилищем вместо перенесённых данных.
+
 ## Проверка перед публикацией
 
-Публикуйте только шаблоны, Compose-файлы, скрипты и документацию. `.gitignore` исключает `.env`, `.credentials.env`, пароли Portainer, рабочие каталоги HA/MQTT/Matter, `plugins/*/data/`, настройки редактора, базы, журналы и резервные копии. Файлы `.env.example` и `.credentials.env.example` содержат только пустые или условные значения.
+Публикуйте только шаблоны, Compose-файлы, скрипты и документацию. `.gitignore` исключает `.env`, `.credentials.env`, пароли Portainer, рабочие каталоги HA/MQTT/Matter, `plugins/*/data/` (кроме пустых `.stub`), настройки редактора, базы, журналы и резервные копии. Файлы `.env.example` и `.credentials.env.example` содержат только пустые или условные значения.
 
 `.gitignore` не исключает файлы, которые уже отслеживаются Git. После подготовки нового репозитория и добавления файлов проверьте состав индекса:
 

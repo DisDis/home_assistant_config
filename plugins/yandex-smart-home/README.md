@@ -7,10 +7,10 @@
 1. Проверьте совместимость установленной версии HA с выбранным релизом компонента. Документация ветки 1.1.x указывает HA 2025.12 или новее; перед обновлением сверяйте требования [актуальной документации](https://docs.yaha-cloud.ru/v1.1.x/).
 2. Откройте HACS. Если его нет, следуйте [официальной инструкции для своей версии HA](https://www.hacs.xyz/docs/use/download/download/), выбрав Home Assistant Container. В версиях HA с встроенным Marketplace используйте доступный интерфейс HACS/Marketplace; повторно устанавливать существующий HACS не нужно. Для старых версий инструкция HACS предусматривает загрузку внутри контейнера, перезапуск HA и добавление HACS через интерфейс интеграций.
 3. В поиске HACS найдите **Yandex Smart Home**, проверьте репозиторий `dext0r/yandex_smart_home`, скачайте выбранный совместимый релиз.
-4. Перезапустите Home Assistant. На сервере, где основной стек находится в `/home/hauser/homeassistant`:
+4. Перезапустите Home Assistant. На сервере, где основной стек находится в `/home/hauser/home_assistant_config/homeassistant`:
 
    ```bash
-   cd /home/hauser/homeassistant
+   cd /home/hauser/home_assistant_config/homeassistant
    docker compose restart homeassistant
    ```
 

@@ -4,14 +4,16 @@
 
 ## Подготовка и включение
 
+Используйте [клон проекта на Raspberry Pi](../../readme.md#клонирование-репозитория). Каталог `plugins/matter-server/data/` должен существовать до запуска; в клоне он создаётся благодаря пустому `.stub`. Для существующей установки сохраните перенесённые данные контроллера.
+
 1. В `plugins/.env` задайте `MATTER_PRIMARY_INTERFACE` и `MATTER_BLUETOOTH_ADAPTER`: интерфейс с рабочим IPv6 и индекс адаптера BlueZ (`hci0` → `0`). При необходимости выберите версию или digest в `MATTER_SERVER_IMAGE`; по умолчанию сохранён образ `ghcr.io/home-assistant-libs/python-matter-server:stable`.
 2. Подготовьте сертификаты по [инструкции ниже](#ручная-загрузка-сертификатов-при-недоступности-dcl-из-рф) до первого запуска: обращение к DCL в этом Compose заблокировано.
 3. Добавьте `matter-server` к `COMPOSE_PROFILES` в `plugins/.env`. Например, `COMPOSE_PROFILES=matter-server` включает только Matter; `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator,matter-server` — все три плагина.
 4. После запуска основного стека выполните:
 
    ```bash
-   bash /home/hauser/homeassistant/system/plugins.sh apply /home/hauser/plugins
-   bash /home/hauser/homeassistant/system/plugins.sh check /home/hauser/plugins
+   bash /home/hauser/home_assistant_config/system/plugins.sh apply /home/hauser/home_assistant_config/plugins
+   bash /home/hauser/home_assistant_config/system/plugins.sh check /home/hauser/home_assistant_config/plugins
    ```
 
 5. [Добавьте интеграцию Matter в HA](#включение-интеграции-matter).
@@ -54,12 +56,12 @@ Home Assistant и Matter Server работают в режиме `host` на о�
 
 ## Ручная загрузка сертификатов при недоступности DCL из РФ
 
-В текущем Compose доступ к `on.dcl.csa-iot.org` намеренно заблокирован. Сертификаты PAA хранятся на хосте в `/home/hauser/plugins/matter-server/data/credentials/`; контейнер видит этот каталог как `/data/credentials` благодаря параметру `--paa-root-cert-dir`.
+В текущем Compose доступ к `on.dcl.csa-iot.org` намеренно заблокирован. Сертификаты PAA хранятся на хосте в `/home/hauser/home_assistant_config/plugins/matter-server/data/credentials/`; контейнер видит этот каталог как `/data/credentials` благодаря параметру `--paa-root-cert-dir`.
 
 Остановите Matter Server и подготовьте каталоги на Raspberry Pi:
 
 ```bash
-cd /home/hauser/plugins
+cd /home/hauser/home_assistant_config/plugins
 docker compose --profile matter-server stop --timeout 60 matter-server
 sudo mkdir -p ./matter-server/data/credentials
 mkdir -p /home/hauser/paa-root-certs
@@ -70,7 +72,7 @@ mkdir -p /home/hauser/paa-root-certs
 Убедитесь, что загруженные `.der` уже находятся в указанном каталоге. Скопируйте их в хранилище и создайте служебный файл `.version` только после успешного копирования:
 
 ```bash
-cd /home/hauser/plugins
+cd /home/hauser/home_assistant_config/plugins
 sudo cp /home/hauser/paa-root-certs/*.der ./matter-server/data/credentials/ &&
   printf '1\n' | sudo tee ./matter-server/data/credentials/.version > /dev/null
 ```
@@ -80,7 +82,7 @@ sudo cp /home/hauser/paa-root-certs/*.der ./matter-server/data/credentials/ &&
 После успешного копирования включите профиль в `.env`, примените его и проверьте журнал:
 
 ```bash
-bash /home/hauser/homeassistant/system/plugins.sh apply /home/hauser/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh apply /home/hauser/home_assistant_config/plugins
 docker logs --tail 50 matter-server
 ```
 
@@ -113,7 +115,7 @@ docker logs matter-server
 ## Пересоздание контейнера Matter с сохранением устройств
 
 ```bash
-cd /home/hauser/plugins
+cd /home/hauser/home_assistant_config/plugins
 docker compose --profile matter-server up -d --pull never --no-deps --force-recreate matter-server
 ```
 
@@ -126,7 +128,7 @@ Compose пересоздаст только Matter Server. Каталог `plugi
 Для полного сброса с возможностью восстановления остановите и удалите контейнер, затем перенесите хранилище в резервную копию:
 
 ```bash
-cd /home/hauser/plugins
+cd /home/hauser/home_assistant_config/plugins
 docker compose --profile matter-server stop --timeout 60 matter-server
 docker compose --profile matter-server rm -f matter-server
 

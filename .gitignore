@@ -16,7 +16,6 @@ id_ed25519
 *.pfx
 
 # Home Assistant, MQTT, Zigbee, Matter, and editor runtime state
-/plugins/*/data/
 /homeassistant/config/
 /homeassistant/mosquitto/
 /homeassistant/zigbee2mqtt-data/
@@ -32,6 +31,10 @@ id_ed25519
 tools/cockpit/listen.conf
 .storage/
 data/
+# Clone plugin data directories, but publish only their empty placeholders.
+!/plugins/*/data/
+/plugins/*/data/*
+!/plugins/*/data/.stub
 
 # Backups, databases, logs, and local copies
 backups/

@@ -23,12 +23,14 @@ class PluginTests(unittest.TestCase):
         self.plugins = self.root / "plugins"
         self.plugins.mkdir()
         shutil.copy(ROOT / "plugins/docker-compose.yml", self.plugins)
-        self.system = self.root / "homeassistant/system"
+        self.main = self.root / "homeassistant"
+        self.main.mkdir()
+        self.system = self.root / "system"
         self.system.mkdir(parents=True)
         for name in ("ha.sh", "plugins.py", "plugins.sh", "autostart.sh"):
             shutil.copy(ROOT / "system" / name, self.system)
-        shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.system.parent)
-        (self.system.parent / "config").mkdir()
+        shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.main)
+        (self.main / "config").mkdir()
         for service in PLUGIN_NAMES:
             data = self.plugins / service / "data"
             data.mkdir(parents=True)
@@ -123,7 +125,7 @@ class PluginTests(unittest.TestCase):
             source = next(v["source"] for v in services[service]["volumes"] if v["target"] == target)
             self.assertEqual(Path(source), self.plugins / service / "data")
         shared = next(v for v in services["hass-configurator"]["volumes"] if v["target"] == "/hass-config")
-        self.assertEqual(Path(shared["source"]), self.system.parent / "config")
+        self.assertEqual(Path(shared["source"]), self.main / "config")
         self.assertFalse(shared.get("bind", {}).get("create_host_path", False))
         for service in services.values():
             self.assertEqual(service["logging"]["options"], {"max-size": "10m", "max-file": "3"})
@@ -133,7 +135,7 @@ class PluginTests(unittest.TestCase):
 
     def test_matter_is_optional_and_keeps_host_network_and_hardware_access(self):
         main = json.loads(self.command([
-            "docker", "compose", "--project-directory", str(self.system.parent),
+            "docker", "compose", "--project-directory", str(self.main),
             "--env-file", os.devnull, "config", "--format", "json"]).stdout)
         self.assertEqual(set(main["services"]), {"homeassistant", "mosquitto"})
         matter = self.config(all_profiles=True)["services"]["matter-server"]
@@ -247,12 +249,12 @@ class PluginTests(unittest.TestCase):
         def script(heading):
             section = readme.split("### " + heading + "\n", 1)[1]
             block = re.search(r"```bash\n(.*?)\n```", section, flags=re.S).group(1)
-            return block.replace("/home/hauser", str(self.root))
+            return block.replace("/home/hauser/home_assistant_config", str(self.root))
 
         profiles = ("matter-server",)
         self.state.write_text("{}")
         self.select(profiles)
-        self.command(["docker", "compose", "--project-directory", str(self.system.parent),
+        self.command(["docker", "compose", "--project-directory", str(self.main),
                       "--env-file", os.devnull, "up", "-d", "--pull", "never"])
         self.plugin("apply")
         self.command(["docker", "compose", "--project-directory", str(self.root / "tools/portainer"),
@@ -268,7 +270,7 @@ class PluginTests(unittest.TestCase):
         stops = [c for c in commands if c[0] == "stop" or c[0] == "compose" and "stop" in c]
         self.assertEqual(stops[0], ["stop", "--time", "60", "ha-plugins_matter-server"])
         self.assertEqual(stops[1][0], "compose")  # Plugins stop before the main stack.
-        self.assertIn(str(self.system.parent), stops[1])
+        self.assertIn(str(self.main), stops[1])
         self.assertFalse(any("pull" in c or "up" in c or c[0] == "rm" for c in commands))
         for action in ("Запуск после остановки", "Перезапуск всей системы"):
             self.log.write_text("")
@@ -286,7 +288,7 @@ class PluginTests(unittest.TestCase):
         self.assertFalse(self.mutations())
 
     def test_controller_fails_before_stopping_on_invalid_configuration(self):
-        (self.system.parent / "docker-compose.yml").write_text("services: [invalid]\n")
+        (self.main / "docker-compose.yml").write_text("services: [invalid]\n")
         self.command(["bash", str(self.system / "ha.sh"), "restart"], success=False)
         self.assertFalse(self.mutations())
 
@@ -296,7 +298,7 @@ class PluginTests(unittest.TestCase):
                      env=dict(self.env, FAKE_FAIL_UP="1"))
         starts = [c for c in self.commands() if c[0] == "compose" and "up" in c]
         self.assertEqual(len(starts), 1)
-        self.assertIn(str(self.system.parent), starts[0])
+        self.assertIn(str(self.main), starts[0])
         self.assertEqual(json.loads(self.state.read_text()), {})
 
     def test_controller_help_and_unknown_action_do_not_access_docker(self):
@@ -306,11 +308,11 @@ class PluginTests(unittest.TestCase):
 
     def test_autostart_delegates_to_controller(self):
         self.select(("matter-server",))
-        args = ["bash", str(self.system / "autostart.sh"), str(self.system.parent),
+        args = ["bash", str(self.system / "autostart.sh"), str(self.main),
                 str(self.root / "tools"), str(self.plugins)]
         self.command(args)
         starts = [c for c in self.commands() if c[0] == "compose" and "up" in c]
-        self.assertIn(str(self.system.parent), starts[0])
+        self.assertIn(str(self.main), starts[0])
         self.assertIn(str(self.plugins), starts[1])
         self.assertIn(str(self.root / "tools/portainer"), starts[2])
         self.assertFalse(any("pull" in c for c in self.commands() if c[0] == "compose"))

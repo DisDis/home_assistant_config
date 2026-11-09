@@ -10,7 +10,7 @@
 
 По умолчанию Portainer, шаблон Kuma и Cockpit слушают только `127.0.0.1`. Для доступа из LAN создайте на сервере локальный `.env` в каталоге соответствующего Compose-проекта из `tools/.env.example` и задайте `TOOLS_BIND_IP` — реальный LAN IPv4-адрес сервера. Для Cockpit создайте локальную копию `listen.conf.local` и измените в ней `ListenStream=127.0.0.1:9090` до установки. Эта копия исключена из Git. Реальные адреса и локальные настройки не возвращайте в публичные шаблоны.
 
-Для установки нужны Docker с Compose, доступ по SSH, `sudo`, `openssl` и `nano`. Установка Docker и пакетов описана в [основном README](../readme.md#установка-и-настройка-docker). Сначала скопируйте файлы по следующему разделу, затем подключитесь к серверу. Если репозиторий уже клонирован на Raspberry Pi, копирование можно пропустить; замените пути `/home/hauser/tools` фактическим каталогом `tools` в своём клоне.
+Для установки нужны Docker с Compose, доступ по SSH, `sudo`, `openssl` и `nano`. Установка Docker и пакетов описана в [основном README](../readme.md#установка-и-настройка-docker). Сначала [склонируйте весь репозиторий на Raspberry Pi](../readme.md#клонирование-репозитория). Все команды ниже выполняются в SSH-сеансе на сервере; каталог инструментов — `/home/hauser/home_assistant_config/tools`.
 
 Portainer и Cockpit используют HTTPS; при самоподписанном сертификате браузер попросит подтвердить его. Uptime Kuma можно включить отдельно по инструкции ниже.
 
@@ -20,39 +20,25 @@ Portainer и Cockpit используют HTTPS; при самоподписан
 
 Пароль первоначального администратора Portainer хранится только на сервере в `portainer/secrets/admin-password`. Учётные данные Kuma и адрес для мониторинга задаются локально в `.credentials.env`; используйте `.credentials.env.example` как пустой шаблон. Файлы с учётными данными должны иметь права `600`. Рабочие данные хранятся в `portainer/data/` и `uptime-kuma/data/`.
 
-Каждая утилита — независимый Compose-проект. Основной Compose в репозитории находится в [homeassistant/docker-compose.yml](../homeassistant/docker-compose.yml). На сервере в примерах основной стек размещён в `/home/hauser/homeassistant`, инструменты — в `/home/hauser/tools`.
+Каждая утилита — независимый Compose-проект. Основной Compose в репозитории находится в [homeassistant/docker-compose.yml](../homeassistant/docker-compose.yml). На сервере в примерах основной стек размещён в `/home/hauser/home_assistant_config/homeassistant`, инструменты — в `/home/hauser/home_assistant_config/tools`.
 
-Автозапуск контейнеров и проверка после перезагрузки описаны в [основном README](../readme.md#автозапуск-после-перезагрузки). Скрипт `system/autostart.sh` запускает включённые проекты инструментов и проверяет их политики перезапуска; отключённая Kuma пропускается. HA и плагины запускаются через общий `system/ha.sh`, инструменты затем запускаются отдельно; выбор плагинов берётся из `plugins/.env`; все профили по умолчанию выключены. Для ручного `docker compose` используйте `.env` в каталоге утилиты либо явно передавайте `--env-file /home/hauser/tools/.env`, если настройки хранятся в общем файле.
+Автозапуск контейнеров и проверка после перезагрузки описаны в [основном README](../readme.md#автозапуск-после-перезагрузки). Скрипт `system/autostart.sh` запускает включённые проекты инструментов и проверяет их политики перезапуска; отключённая Kuma пропускается. HA и плагины запускаются через общий `system/ha.sh`, инструменты затем запускаются отдельно; выбор плагинов берётся из `plugins/.env`; все профили по умолчанию выключены. Для ручного `docker compose` используйте `.env` в каталоге утилиты либо явно передавайте `--env-file /home/hauser/home_assistant_config/tools/.env`, если настройки хранятся в общем файле.
 
-## Копирование конфигурации на сервер
+## Подготовка в клоне репозитория
 
-Следующий блок выполняется **на компьютере, в корне репозитория**, где есть каталог `tools/`. Он создаёт каталоги на сервере и передаёт существующие публичные файлы:
+Все шаблоны уже находятся в `tools/` внутри `home_assistant_config/`: [сокет Cockpit](cockpit/listen.conf.example), [адрес панелей](.env.example), [учётные данные Kuma](.credentials.env.example) и Compose-файлы. Создавайте рабочие `.env`, `listen.conf.local` и файлы с паролями локально по следующим разделам, сохраняя существующие файлы.
 
-```bash
-ssh hauser@192.0.2.10 'mkdir -p /home/hauser/tools/portainer /home/hauser/tools/uptime-kuma /home/hauser/tools/cockpit'
-scp tools/README.md tools/.env.example tools/.credentials.env.example hauser@192.0.2.10:/home/hauser/tools/
-scp tools/portainer/docker-compose.yml hauser@192.0.2.10:/home/hauser/tools/portainer/docker-compose.yml
-scp tools/uptime-kuma/docker-compose.yml hauser@192.0.2.10:/home/hauser/tools/uptime-kuma/docker-compose.yml
-scp tools/uptime-kuma/setup-monitors.js hauser@192.0.2.10:/home/hauser/tools/uptime-kuma/setup-monitors.js
-scp tools/cockpit/listen.conf.example hauser@192.0.2.10:/home/hauser/tools/cockpit/
-```
+До первого запуска контейнера создайте его каталог данных. Для уже настроенной утилиты перенесите прежний `data/` с сохранением прав и владельца до пересоздания контейнера; пустой каталог запустит новую установку. Команды `mkdir -p` ниже сохраняют имеющиеся данные.
 
-В репозитории уже есть [шаблон сокета Cockpit](cockpit/listen.conf.example), [шаблон адреса панелей](.env.example) и [шаблон учётных данных Kuma](.credentials.env.example). На сервер они передаются с теми же именами. Рабочие `.env`, `listen.conf.local` и файлы с паролями создаются локально следующими командами; при копировании они сохраняются.
-
-Подключитесь к Raspberry Pi:
-
-```bash
-ssh hauser@192.0.2.10
-```
-
-Остальные команды установки и обслуживания ниже выполняются **в SSH-сеансе на Raspberry Pi**. Команды `curl` проверяют панель с самого сервера; доступ с другого компьютера требует LAN-привязки и проверки адреса в браузере.
+Команды `curl` проверяют панель с самого сервера; доступ с другого компьютера требует LAN-привязки и проверки адреса в браузере.
 
 ## Установка Portainer CE
 
 Следующие команды выполняются на Raspberry Pi. Пароль создаётся только при отсутствии файла, чтобы повторное выполнение не меняло сохранённые учётные данные.
 
 ```bash
-cd /home/hauser/tools/portainer
+cd /home/hauser/home_assistant_config/tools/portainer
+mkdir -p data
 [ -e .env ] || (umask 077; cp ../.env.example .env)
 chmod 600 .env
 # Для доступа из LAN задайте TOOLS_BIND_IP в локальном .env.
@@ -73,7 +59,7 @@ curl --insecure --fail "https://${portainer_address}/api/status"
 
 При новой установке выберите локальное Docker-окружение через Unix-сокет `/var/run/docker.sock`, если оно ещё не добавлено. Portainer получает административный доступ к Docker этого сервера. Порты `8000` для Edge Agent и `9000` для HTTP не публикуются.
 
-Существующие контейнеры Home Assistant доступны для просмотра состояния, логов и операций с контейнерами. Изменения основного стека делайте через `/home/hauser/homeassistant/docker-compose.yml`: установка Portainer не переносит этот файл в его редактор стеков.
+Существующие контейнеры Home Assistant доступны для просмотра состояния, логов и операций с контейнерами. Изменения основного стека делайте через `/home/hauser/home_assistant_config/homeassistant/docker-compose.yml`: установка Portainer не переносит этот файл в его редактор стеков.
 
 Перед обновлением Portainer проверьте совместимость выбранной версии с Docker Engine и свою резервную копию данных.
 
@@ -87,12 +73,12 @@ sudo apt-get update
 sudo apt-get install --no-install-recommends cockpit cockpit-storaged cockpit-packagekit
 
 # Подготовить локальную настройку; существующий файл сохраняется.
-cd /home/hauser/tools/cockpit
+cd /home/hauser/home_assistant_config/tools/cockpit
 [ -e listen.conf.local ] || cp listen.conf.example listen.conf.local
 # Для LAN замените 127.0.0.1 на свой LAN IPv4-адрес.
 nano listen.conf.local
 sudo install -d -m 755 /etc/systemd/system/cockpit.socket.d
-sudo install -m 644 /home/hauser/tools/cockpit/listen.conf.local /etc/systemd/system/cockpit.socket.d/listen.conf
+sudo install -m 644 /home/hauser/home_assistant_config/tools/cockpit/listen.conf.local /etc/systemd/system/cockpit.socket.d/listen.conf
 
 # Остановить уже запущенную веб-службу перед применением настройки сокета.
 sudo systemctl stop cockpit.service
@@ -125,10 +111,11 @@ sudo journalctl -u cockpit.socket -u cockpit.service -n 100 --no-pager
 
 ## Восстановление Uptime Kuma (сейчас отключён)
 
-В шаблоне сервис закомментирован. Чтобы включить Kuma, отредактируйте на сервере `/home/hauser/tools/uptime-kuma/docker-compose.yml`: замените `services: {}` на `services:` и снимите один уровень комментария `# ` со строк блока `uptime-kuma`, сохранив YAML-отступы. Затем выполните команды ниже. При существующем `data/` подключится сохранённая база; на новой установке база будет создана при запуске. До включения сервиса команды запуска Kuma пропустите.
+В шаблоне сервис закомментирован. Чтобы включить Kuma, отредактируйте на сервере `/home/hauser/home_assistant_config/tools/uptime-kuma/docker-compose.yml`: замените `services: {}` на `services:` и снимите один уровень комментария `# ` со строк блока `uptime-kuma`, сохранив YAML-отступы. Затем выполните команды ниже. При существующем `data/` подключится сохранённая база; на новой установке база будет создана при запуске. До включения сервиса команды запуска Kuma пропустите.
 
 ```bash
-cd /home/hauser/tools/uptime-kuma
+cd /home/hauser/home_assistant_config/tools/uptime-kuma
+mkdir -p data
 [ -e .env ] || (umask 077; cp ../.env.example .env)
 chmod 600 .env
 # Для доступа из LAN задайте TOOLS_BIND_IP в локальном .env.
@@ -150,7 +137,7 @@ curl --fail --output /dev/null --write-out '%{http_code}\n' "http://${kuma_addre
 После включения и запуска Kuma скрипт `setup-monitors.js` создаёт администратора только в пустой установке, затем добавляет отсутствующие по имени проверки. Существующие учётные записи и проверки не изменяются. Скрипт запускается вручную на сервере:
 
 ```bash
-cd /home/hauser/tools
+cd /home/hauser/home_assistant_config/tools
 [ -e .credentials.env ] || (umask 077; cp .credentials.env.example .credentials.env)
 chmod 600 .credentials.env
 # Задайте MONITOR_HOST, UPTIME_KUMA_USERNAME и UPTIME_KUMA_PASSWORD.
@@ -180,7 +167,7 @@ unset MONITOR_HOST PORTAINER_USERNAME PORTAINER_PASSWORD UPTIME_KUMA_USERNAME UP
 
 ## Обновление и резервное копирование
 
-В Compose инструментов используются теги версий. Для обновления измените тег в публичном шаблоне, скопируйте файл на сервер и выполните команды в каталоге соответствующего **включённого** проекта: `/home/hauser/tools/portainer` либо `/home/hauser/tools/uptime-kuma`. При отключённой Kuma её обновление пропустите.
+В Compose инструментов используются теги версий. Для обновления измените тег, получите изменения в серверном клоне через `git pull --ff-only` по [основной инструкции](../readme.md#обновление-существующей-установки) и выполните команды в каталоге соответствующего **включённого** проекта: `/home/hauser/home_assistant_config/tools/portainer` либо `/home/hauser/home_assistant_config/tools/uptime-kuma`. При отключённой Kuma её обновление пропустите.
 
 ```bash
 docker compose config --quiet

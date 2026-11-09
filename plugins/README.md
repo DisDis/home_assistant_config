@@ -8,41 +8,41 @@ plugins/
   .env
   zigbee2mqtt/
     README.md
-    data/                 # создаётся при запуске
+    data/
+      .stub               # каталог существует после клонирования
   hass-configurator/
     README.md
     data/
+      .stub
   matter-server/
     README.md
     data/
+      .stub
   yandex-smart-home/
     README.md             # компонент HACS хранится в конфигурации HA
 ```
 
-Команды ниже выполняются на сервере. Пример размещения: основной стек `/home/hauser/homeassistant`, плагины `/home/hauser/plugins`, скрипты `/home/hauser/homeassistant/system`. В клоне репозитория `system/` находится в корне: замените путь к скрипту. Для скриптов нужны Bash, Python 3.9+ и Docker Compose v2.27+; Python использует только стандартную библиотеку.
+Команды ниже выполняются на Raspberry Pi внутри клона `home_assistant_config/`, созданного по [основной инструкции](../readme.md#клонирование-репозитория). Пример корня проекта — `/home/hauser/home_assistant_config`; основной стек находится в `homeassistant/`, плагины — в `plugins/`, скрипты — в корневом `system/`. Для скриптов нужны Bash, Python 3.9+ и Docker Compose v2.27+; Python использует только стандартную библиотеку.
 
-## Копирование и подготовка
+## Подготовка в клоне репозитория
 
-На компьютере из корня репозитория передайте публичные файлы:
+Каталоги `data/` контейнерных плагинов должны существовать **до первого запуска**. В Git для каждого из них сохранён пустой файл `.stub`, поэтому каталоги появляются при клонировании. Для существующей установки или нового плагина их можно подготовить явно; `mkdir -p` сохраняет имеющиеся данные:
 
 ```bash
-ssh hauser@192.0.2.10 'mkdir -p /home/hauser/plugins/yandex-smart-home /home/hauser/plugins/zigbee2mqtt /home/hauser/plugins/hass-configurator /home/hauser/plugins/matter-server /home/hauser/homeassistant/system'
-scp plugins/docker-compose.yml plugins/.env.example plugins/README.md hauser@192.0.2.10:/home/hauser/plugins/
-scp plugins/yandex-smart-home/README.md hauser@192.0.2.10:/home/hauser/plugins/yandex-smart-home/
-scp plugins/zigbee2mqtt/README.md hauser@192.0.2.10:/home/hauser/plugins/zigbee2mqtt/
-scp plugins/hass-configurator/README.md hauser@192.0.2.10:/home/hauser/plugins/hass-configurator/
-scp plugins/matter-server/README.md hauser@192.0.2.10:/home/hauser/plugins/matter-server/
-scp system/ha.sh system/plugins.sh system/plugins.py system/autostart.sh hauser@192.0.2.10:/home/hauser/homeassistant/system/
+cd /home/hauser/home_assistant_config
+mkdir -p plugins/zigbee2mqtt/data plugins/hass-configurator/data plugins/matter-server/data
 ```
 
-На сервере создайте локальный `.env`, сохраняя уже существующий:
+Рабочее содержимое `data/` исключено из Git; публикуется только пустой `.stub`. Yandex Smart Home работает внутри HA через HACS, поэтому отдельный `plugins/yandex-smart-home/data/` ему не нужен. На существующей установке используйте перенесённые данные и не проходите первоначальную настройку Zigbee- или Matter-сети повторно.
+
+Создайте локальный `.env`, сохраняя уже существующий, и заполните параметры выбранных плагинов:
 
 ```bash
-cd /home/hauser/plugins
+cd /home/hauser/home_assistant_config/plugins
 [ -e .env ] || (umask 077; cp .env.example .env)
 chmod 600 .env
 nano .env
-bash /home/hauser/homeassistant/system/plugins.sh validate /home/hauser/plugins
+bash ../system/plugins.sh validate
 ```
 
 ## Выбор плагинов
@@ -80,9 +80,9 @@ bash /home/hauser/homeassistant/system/plugins.sh validate /home/hauser/plugins
 Сначала подготовьте и запустите основной стек по [основной инструкции](../readme.md#первый-запуск-сервисов), затем выберите профили и выполните:
 
 ```bash
-bash /home/hauser/homeassistant/system/plugins.sh validate /home/hauser/plugins
-bash /home/hauser/homeassistant/system/plugins.sh apply /home/hauser/plugins
-bash /home/hauser/homeassistant/system/plugins.sh check /home/hauser/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh validate /home/hauser/home_assistant_config/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh apply /home/hauser/home_assistant_config/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh check /home/hauser/home_assistant_config/plugins
 ```
 
 Команды скрипта:
@@ -130,19 +130,19 @@ ssh -L 8080:127.0.0.1:8080 -L 3218:127.0.0.1:3218 hauser@192.0.2.10
 Для бэкапа контейнерных плагинов достаточно сохранять весь `plugins/`: Compose, `.env`, инструкции и все `*/data/`. Остановите работающие контейнеры на время согласованной файловой копии. `--profile '*'` в команде **stop** охватывает все существующие профили и ничего не запускает и не скачивает:
 
 ```bash
-cd /home/hauser/plugins
+cd /home/hauser/home_assistant_config/plugins
 docker compose --profile '*' stop --timeout 60
-cd /home/hauser
+cd /home/hauser/home_assistant_config
 umask 077
 mkdir -p backups
 plugins_backup="backups/plugins-$(date +%Y%m%d-%H%M%S).tar.gz"
 sudo tar -czf - plugins > "$plugins_backup"
-bash /home/hauser/homeassistant/system/plugins.sh start /home/hauser/plugins
+bash /home/hauser/home_assistant_config/system/plugins.sh start /home/hauser/home_assistant_config/plugins
 ```
 
 Если архивирование завершилось ошибкой, сохраните сообщение ошибки, верните контейнеры через `start` и повторите бэкап после исправления причины. Архив содержит секреты из `.env` и данных приложений; храните его с правами `600` и копией на другом устройстве. При восстановлении распакуйте весь каталог в прежнее место с сохранением владельцев и прав, проверьте `.env` и выполните `plugins.sh apply`.
 
-Конфигурация HA, которую редактирует File Editor, и компоненты HACS, включая Yandex Smart Home, находятся в `homeassistant/config/`. Они входят в отдельный бэкап Home Assistant. Архив `plugins/` не заменяет бэкап HA. Образы не удаляются при отключении; очистку выполняйте отдельно после проверки обновления. Все каталоги `plugins/*/data/`, рабочие `.env` и бэкапы исключены из Git.
+Конфигурация HA, которую редактирует File Editor, и компоненты HACS, включая Yandex Smart Home, находятся в `homeassistant/config/`. Они входят в отдельный бэкап Home Assistant. Архив `plugins/` не заменяет бэкап HA. Образы не удаляются при отключении; очистку выполняйте отдельно после проверки обновления. Рабочее содержимое `plugins/*/data/`, файлы `.env` и бэкапы исключены из Git; в каталогах данных отслеживаются только пустые `.stub`.
 
 ## Как добавить новый контейнерный плагин
 
@@ -152,7 +152,7 @@ bash /home/hauser/homeassistant/system/plugins.sh start /home/hauser/plugins
 
 1. Найдите официальный образ с поддержкой архитектуры сервера, выберите конкретный тег или digest. Уточните внутренние порты, каталоги данных, авторизацию и протокол подключения к HA.
 
-2. Создайте `plugins/my-plugin/README.md`. Все рабочие файлы приложения храните в `plugins/my-plugin/data/`; этот путь уже исключён из Git. Если нужны несколько монтирований, используйте подкаталоги `data/config`, `data/database` и т. п.
+2. Создайте `plugins/my-plugin/README.md` и заранее подготовьте `plugins/my-plugin/data/` с пустым файлом `.stub`, чтобы каталог появлялся при клонировании. Все рабочие файлы приложения храните в `plugins/my-plugin/data/`; в Git разрешён только его пустой `.stub`. Если нужны несколько монтирований, используйте подкаталоги `data/config`, `data/database` и т. п.
 
 3. Добавьте сервис в `plugins/docker-compose.yml`. Ниже условный шаблон: замените образ, порты и `/data` параметрами своего приложения. Якорь логирования уже есть в общем файле.
 
@@ -176,6 +176,6 @@ bash /home/hauser/homeassistant/system/plugins.sh start /home/hauser/plugins
 
 6. Опишите в `my-plugin/README.md` нужные настройки, подключение к HA, содержимое `data/`, порядок обновления и бэкапа. При необходимости задайте Docker `healthcheck` прямо в сервисе: `apply` ожидает его, а `check` проверяет состояние.
 
-7. Передайте на сервер обновлённые Compose и инструкцию. Дополните существующий `plugins/.env` новыми параметрами, добавьте `my-plugin` в `COMPOSE_PROFILES`, выполните `plugins.sh validate`, `apply`, `check`. `validate` проверяет только Compose и профили; работу приложения и связь с HA проверьте отдельно.
+7. Получите изменения в серверном клоне через `git pull --ff-only` по [основной инструкции](../readme.md#обновление-существующей-установки). Дополните существующий `plugins/.env` новыми параметрами, добавьте `my-plugin` в `COMPOSE_PROFILES`, выполните `plugins.sh validate`, `apply`, `check`. `validate` проверяет только Compose и профили; работу приложения и связь с HA проверьте отдельно.
 
 8. Удалите профиль из `.env`, снова выполните `apply` и убедитесь, что контейнеры удалены, а `my-plugin/data/` сохранён. Повторное включение должно восстановить настройки. Проверяйте только изменённый сервис и затронутые команды; перебор сочетаний профилей не требуется. Общие локальные проверки: `python3 -m unittest discover -s tests -v`; они используют настоящий Compose и имитацию Docker daemon без скачивания образов. Тест с произвольным новым плагином подтверждает, что правки Python не нужны.
