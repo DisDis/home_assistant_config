@@ -33,6 +33,7 @@ class Reporter:
         self.color = self.tty and not no_color
         self.file = None
         self.events = []
+        self.warnings = []
         self.failed = False
         self.console = True
         self.active_width = 0
@@ -94,10 +95,23 @@ class Reporter:
     def stage(self, number, title):
         self.show(f"\n{self.symbol('step')} Этап {number}/5  {title}", "STEP")
 
+    def detail(self, message):
+        if self.verbose:
+            self.show(message, "DEBUG")
+        else:
+            self.record(message, "DEBUG")
+
+    def composition(self, entries):
+        self.show(f"\nСостав копии ({len(entries)} архивов):")
+        for index, (label, filename) in enumerate(entries, 1):
+            self.show(f"  {index:>2}. {label}")
+            self.detail(f"      Архив: {filename}")
+
     def ok(self, message):
         self.show(f"{self.symbol('ok')} {message}", "OK")
 
     def warning(self, message):
+        self.warnings.append(message)
         self.show(f"ПРЕДУПРЕЖДЕНИЕ: {message}", "WARN")
 
     def error(self, message, details=()):
@@ -111,6 +125,8 @@ class Reporter:
 
     def command_line(self, line, channel):
         level = "ERROR" if ERROR.search(line) else "WARN" if WARNING.search(line) else "DEBUG"
+        if level == "WARN":
+            self.warnings.append(line)
         if self.verbose or level == "WARN":
             self.show(f"  {channel}: {line}", level)
         else:
@@ -156,3 +172,5 @@ class Reporter:
                 self.file.close()
             except OSError:
                 self.failed = True
+            finally:
+                self.file = None

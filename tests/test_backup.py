@@ -33,7 +33,7 @@ class BackupTests(unittest.TestCase):
             shutil.copy(ROOT / "system" / name, self.system)
         # Only the euid policy is simulated. File opens retain the real OS permissions.
         self.runner = self.root / "run_backup.py"
-        self.runner.write_text('''import os, pathlib, runpy, shutil, sys
+        self.runner.write_text('''import errno, os, pathlib, runpy, shutil, sys
 from contextlib import ExitStack
 from unittest.mock import patch
 sys.dont_write_bytecode = True
@@ -45,7 +45,20 @@ with ExitStack() as patches:
     if "TEST_FREE_BYTES" in os.environ:
         usage = shutil.disk_usage(script.parent)
         patches.enter_context(patch("shutil.disk_usage", return_value=usage._replace(free=int(os.environ["TEST_FREE_BYTES"]))))
-    runpy.run_path(str(script), run_name="__main__")
+    if os.environ.get("TEST_REPORT_FAILURE"):
+        module = runpy.run_path(str(script), run_name="backup_under_test")
+        original = module["atomic_json"]
+        failed = False
+        def save(path, report):
+            global failed
+            if report["stop_attempted"] and not failed:
+                failed = True
+                raise OSError(errno.ENOSPC, "simulated result write failure", str(path))
+            original(path, report)
+        module["main"].__globals__["atomic_json"] = save
+        sys.exit(module["main"]())
+    else:
+        runpy.run_path(str(script), run_name="__main__")
 ''')
         shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.main)
         shutil.copy(ROOT / "plugins/docker-compose.yml", self.plugins)
@@ -155,7 +168,14 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             "matter-server", "hass-configurator", "zigbee2mqtt", "future-plugin", "yandex-smart-home"))
         self.assertEqual({p.name for p in output.glob("*.tar.gz")}, expected)
         for name in expected:
-            self.assertIn(name, result.stdout)
+            self.assertNotIn(name, result.stdout)
+            self.assertIn(name, (output / "backup.log").read_text())
+        self.assertIn("1. Home Assistant + MQTT", result.stdout)
+        self.assertRegex(result.stdout, r"(?m)^\s+\d+\. File Editor$")
+        self.assertRegex(result.stdout, r"(?m)^\s+\d+\. Matter Server$")
+        self.assertRegex(result.stdout, r"(?m)^\s+\d+\. HACS \(инструкции\)$")
+        self.assertNotIn("Яндекс", result.stdout + result.stderr)
+        self.assertNotIn("yandex-smart-home", result.stdout + result.stderr)
         self.assertTrue((output / "SUCCESS").is_file())
         self.assertFalse((output / "FAILED").exists())
         self.assertEqual(output.stat().st_mode & 0o777, 0o700)
@@ -372,6 +392,19 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertEqual(report["services_status"], "unchanged")
         self.assertEqual(report["status"], "failed")
         self.assert_running()
+
+    def test_report_write_failure_after_stop_still_restarts_services(self):
+        result = self.invoke(TEST_REPORT_FAILURE="1")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_running()
+        output = self.output_dir()
+        self.assertTrue((output / "FAILED").exists())
+        self.assertFalse((output / "SUCCESS").exists())
+        report = json.loads((output / "result.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["services_status"], "running")
+        self.assertTrue(report["restart_attempted"])
+        self.assertIn("Недостаточно свободного места", result.stderr)
 
 
 if __name__ == "__main__":

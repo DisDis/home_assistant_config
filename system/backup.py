@@ -28,6 +28,8 @@ from backup_ui import Reporter, duration, human_size
 
 
 EXCLUDED = {"backups", ".ha-backup.lock"}
+PLUGIN_LABELS = {"hass-configurator": "File Editor", "matter-server": "Matter Server",
+                 "zigbee2mqtt": "Zigbee2MQTT", "yandex-smart-home": "HACS (инструкции)"}
 
 
 class BackupError(Exception):
@@ -180,13 +182,13 @@ def plan(main_dir, plugins_dir, timestamp):
             raise BackupError(f"Ссылка вместо каталога/файла плагина: {entry}; укажите реальные данные")
         path = str(Path(plugins_dir.name) / entry.name)
         if entry.is_dir() and not entry.name.startswith("."):
-            label = entry.name + (" (инструкции)" if entry.name == "yandex-smart-home" else "")
+            label = PLUGIN_LABELS.get(entry.name, entry.name)
             tasks.append(ArchiveTask(f"plugin-{entry.name}-{timestamp}.tar.gz", label,
                                      plugins_dir.parent, [path]))
         else:
             common.append(path)
     if common:
-        tasks.append(ArchiveTask(f"plugins-config-{timestamp}.tar.gz", "Общие настройки",
+        tasks.append(ArchiveTask(f"plugins-config-{timestamp}.tar.gz", "Общие настройки плагинов",
                                  plugins_dir.parent, common))
     return tasks
 
@@ -311,8 +313,13 @@ def atomic_json(path, value):
 
 
 def record_error(report, ui, error, phase):
-    entry = {"phase": phase, "type": type(error).__name__, "message": str(error),
-             "details": getattr(error, "details", [])}
+    message = str(error)
+    details = getattr(error, "details", [])
+    if isinstance(error, OSError) and error.errno in (errno.EACCES, errno.EPERM, errno.ENOSPC):
+        reason = "Недостаточно свободного места" if error.errno == errno.ENOSPC else "Нет доступа"
+        message = f"{reason}: {error.filename or phase}"
+        details = [str(error)]
+    entry = {"phase": phase, "type": type(error).__name__, "message": message, "details": details}
     report["errors"].append(entry)
     ui.error(entry["message"], entry["details"])
     if getattr(error, "action", None):
@@ -357,9 +364,10 @@ def perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report)
         ui.ok("Сервисы остановлены")
         phase = "archive"
         ui.stage(3, "Создание отдельных архивов")
-        ui.show(f"{'Компонент':30}  {'Состояние':12}  {'Размер':12}  Время")
+        ui.show(f"  {'Компонент':30}  {'Состояние':12}  {'Размер':12}  Время")
         for index, (task, item) in enumerate(zip(tasks, report["archives"]), 1):
-            ui.show(f"Архив {index}/{len(tasks)} · {task.name}", "STEP")
+            ui.show(f"Архив {index}/{len(tasks)} · {task.label}", "STEP")
+            ui.detail(f"Файл: {task.name}")
             started = time.monotonic()
             item["status"] = "in_progress"
             try:
@@ -455,7 +463,16 @@ def summary(ui, report, output=None):
             "ERROR" if report["services_status"] == "start_failed" else "INFO")
     total = sum(item["size_bytes"] for item in report["archives"])
     verified = sum(item["status"] == "verified" for item in report["archives"])
-    ui.show(f"Архивы:   проверено {verified}/{len(report['archives'])} · {human_size(total)}")
+    if report["mode"] == "check":
+        ui.show(f"План:     {len(report['archives'])} архивов; архивирование не выполнялось")
+    elif report["backup_status"] == "not_started":
+        ui.show("Архивы:   не создавались")
+    else:
+        created = sum(item["size_bytes"] > 0 for item in report["archives"])
+        ui.show(f"Архивы:   создано {created}/{len(report['archives'])}, "
+                f"проверено {verified}/{len(report['archives'])} · {human_size(total)}")
+    if report["warnings"]:
+        ui.show(f"Предупреждения: {len(report['warnings'])}", "WARN")
     ongoing = " и продолжается; запуск не подтверждён" if report["downtime_ongoing"] else ""
     ui.show(f"Время:    {duration(report['duration_seconds'])} · "
             f"простой {duration(report['downtime_seconds'])}{ongoing}")
@@ -467,6 +484,7 @@ def summary(ui, report, output=None):
 
 def finish(report, ui, started, code, output=None):
     report.update(finished_at=now(), duration_seconds=round(time.monotonic() - started, 3), exit_code=code)
+    report["warnings"] = list(dict.fromkeys(report["warnings"] + ui.warnings))
     if ui.failed:
         code = record_error(report, ui, BackupError("Не все сообщения удалось записать в журнал"), "report")
     report["exit_code"] = code
@@ -480,8 +498,13 @@ def finish(report, ui, started, code, output=None):
             code = record_error(report, ui, error, "report")
             report.update(status="failed", exit_code=code)
     summary(ui, report, output)
+    ui.close()
     # A write failure in the final summary must not leave a SUCCESS marker behind.
     if output and (code or ui.failed):
+        if ui.failed and not code:
+            ui.error("Не удалось полностью записать журнал; бэкап отмечен как незавершённый")
+            report["errors"].append({"phase": "report", "type": "OSError",
+                                     "message": "Ошибка записи журнала", "details": []})
         report.update(status="failed", exit_code=code or 1)
         code = code or 1
         try:
@@ -563,11 +586,8 @@ def main():
             ui.ok("Проверка пройдена. Остановка и архивирование не выполнялись")
             return finish(report, ui, started, 0)
         ui.show(f"\nКопия:       {timestamp}\nНазначение:  {backups_dir / timestamp}")
-        ui.show("Состав копии:")
-        for task in tasks:
-            ui.show(f"  {task.label}: {task.name}")
-        ui.show("HACS/Яндекс: компонент и настройки находятся в архиве Home Assistant; "
-                "отдельный каталог Яндекса содержит инструкции.")
+        ui.composition([(task.label, task.name) for task in tasks])
+        ui.show("HACS: компоненты и их настройки входят в архив Home Assistant.")
         ui.show("\nБудут остановлены Home Assistant, Mosquitto и все контейнеры проекта плагинов.\n"
                 "После копирования: запуск HA и MQTT, затем плагинов из текущего .env.\n"
                 f"Выбранные плагины: {report.get('selected_plugins', 'согласно .env')}", "WARN")
