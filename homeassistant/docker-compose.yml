@@ -5,6 +5,7 @@ services:
     image: ghcr.io/home-assistant/home-assistant:stable
     volumes:
       - ./config:/config
+      - ../repos:/repos
       - /etc/localtime:/etc/localtime:ro
       - /run/dbus:/run/dbus:ro # Доступ к DBus хоста
     cap_add:
