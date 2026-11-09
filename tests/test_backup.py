@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -171,11 +172,10 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             self.assertNotIn(name, result.stdout)
             self.assertIn(name, (output / "backup.log").read_text())
         self.assertIn("1. Home Assistant + MQTT", result.stdout)
-        self.assertRegex(result.stdout, r"(?m)^\s+\d+\. File Editor$")
-        self.assertRegex(result.stdout, r"(?m)^\s+\d+\. Matter Server$")
-        self.assertRegex(result.stdout, r"(?m)^\s+\d+\. HACS \(инструкции\)$")
+        plugin_names = {path.name for path in self.plugins.iterdir() if path.is_dir()}
+        for name in plugin_names:
+            self.assertRegex(result.stdout, rf"(?m)^\s+\d+\. {re.escape(name)}$")
         self.assertNotIn("Яндекс", result.stdout + result.stderr)
-        self.assertNotIn("yandex-smart-home", result.stdout + result.stderr)
         self.assertTrue((output / "SUCCESS").is_file())
         self.assertFalse((output / "FAILED").exists())
         self.assertEqual(output.stat().st_mode & 0o777, 0o700)
@@ -210,6 +210,8 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertGreater(report["downtime_seconds"], 0)
         self.assertFalse(report["downtime_ongoing"])
         self.assertEqual({item["name"] for item in report["archives"]}, expected)
+        self.assertEqual({item["component"] for item in report["archives"]},
+                         plugin_names | {"Home Assistant + MQTT", "Общие настройки плагинов"})
         for item in report["archives"]:
             self.assertEqual(item["status"], "verified")
             self.assertEqual(item["sha256"], hashlib.sha256((output / item["name"]).read_bytes()).hexdigest())

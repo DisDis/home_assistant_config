@@ -28,8 +28,6 @@ from backup_ui import Reporter, duration, human_size
 
 
 EXCLUDED = {"backups", ".ha-backup.lock"}
-PLUGIN_LABELS = {"hass-configurator": "File Editor", "matter-server": "Matter Server",
-                 "zigbee2mqtt": "Zigbee2MQTT", "yandex-smart-home": "HACS (инструкции)"}
 
 
 class BackupError(Exception):
@@ -182,8 +180,7 @@ def plan(main_dir, plugins_dir, timestamp):
             raise BackupError(f"Ссылка вместо каталога/файла плагина: {entry}; укажите реальные данные")
         path = str(Path(plugins_dir.name) / entry.name)
         if entry.is_dir() and not entry.name.startswith("."):
-            label = PLUGIN_LABELS.get(entry.name, entry.name)
-            tasks.append(ArchiveTask(f"plugin-{entry.name}-{timestamp}.tar.gz", label,
+            tasks.append(ArchiveTask(f"plugin-{entry.name}-{timestamp}.tar.gz", entry.name,
                                      plugins_dir.parent, [path]))
         else:
             common.append(path)
