@@ -38,6 +38,7 @@ data/
 
 # Backups, databases, logs, and local copies
 backups/
+.ha-backup.lock
 *.db
 *.db-*
 *.sqlite
