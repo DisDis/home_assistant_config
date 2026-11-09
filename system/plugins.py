@@ -104,12 +104,23 @@ class Plugins:
                     raise PluginError(f"{service}: container is not healthy")
             print(f"{service}: running, restart policy checked")
 
+    def stop_containers(self, containers, *, timeout):
+        known = self.all_config.get("services") or {}
+        services = sorted({self.service_name(c) for c in containers if self.service_name(c) in known})
+        if services:
+            # Compose provides container progress and stops in dependency order.
+            # All profiles apply only to stop; no images or containers are created.
+            run(self.command + ["--profile", "*", "stop", "--timeout", str(timeout), *services], capture=False)
+        retired = [c for c in containers if self.service_name(c) not in known]
+        if retired:
+            names = ", ".join(c.get("Name", c["Id"]).lstrip("/") for c in retired)
+            print("Stopping containers absent from Compose: " + names, flush=True)
+            # These services no longer have a Compose definition. -t also works on older CLIs.
+            run(["docker", "stop", "-t", str(timeout), *[c["Id"] for c in retired]], capture=False)
+
     def stop(self):
         # Stop the entire managed project, including no-longer-selected services.
-        found = self.containers()
-        if found:
-            # -t works with both older --time and newer --timeout Docker CLIs.
-            run(["docker", "stop", "-t", "60", *[c["Id"] for c in found]], capture=False)
+        self.stop_containers(self.containers(), timeout=60)
         print("Plugin containers: stopped; data and containers preserved")
 
     def apply(self, *, pull):
@@ -117,10 +128,10 @@ class Plugins:
         if self.services and pull:
             # Explicit selection prevents inactive profiles from being downloaded.
             self.compose("pull", *self.services, capture=False)
-        disabled = [c["Id"] for c in found if self.service_name(c) not in self.services]
+        disabled = [c for c in found if self.service_name(c) not in self.services]
         if disabled:
-            run(["docker", "stop", "-t", "30", *disabled], capture=False)
-            run(["docker", "rm", *disabled], capture=False)  # No -v: preserve data.
+            self.stop_containers(disabled, timeout=30)
+            run(["docker", "rm", *[c["Id"] for c in disabled]], capture=False)  # No -v: preserve data.
         if self.services:
             self.compose("up", "-d", "--pull", "never", "--wait", "--wait-timeout", "60",
                          *self.services, capture=False)

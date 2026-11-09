@@ -268,7 +268,9 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(c["State"]["Running"], project == "tools-portainer")
         commands = self.commands()
         stops = [c for c in commands if c[0] == "stop" or c[0] == "compose" and "stop" in c]
-        self.assertEqual(stops[0], ["stop", "-t", "60", "ha-plugins_matter-server"])
+        self.assertEqual(stops[0][0], "compose")
+        self.assertIn(str(self.plugins), stops[0])
+        self.assertEqual(stops[0][-6:], ["--profile", "*", "stop", "--timeout", "60", "matter-server"])
         self.assertEqual(stops[1][0], "compose")  # Plugins stop before the main stack.
         self.assertIn(str(self.main), stops[1])
         self.assertFalse(any("pull" in c or "up" in c or c[0] == "rm" for c in commands))
@@ -286,6 +288,33 @@ class PluginTests(unittest.TestCase):
         self.log.write_text("")
         self.command(["bash", "-ec", script("Проверка и расположение каталогов")])
         self.assertFalse(self.mutations())
+
+    def test_stop_shows_compose_progress_and_preserves_oneoff_and_foreign_containers(self):
+        self.select(("matter-server",))
+        self.plugin("apply")
+        state = json.loads(self.state.read_text())
+        for name, project, service, oneoff in (
+                ("retired", "ha-plugins", "retired-service", "False"),
+                ("oneoff", "ha-plugins", "matter-server", "True"),
+                ("unrelated", "another-project", "matter-server", "False")):
+            container = json.loads(json.dumps(state["matter-server"]))
+            container.update(Id=name, Name="/" + name)
+            container["Config"]["Labels"].update({
+                "com.docker.compose.project": project, "com.docker.compose.service": service,
+                "com.docker.compose.oneoff": oneoff,
+            })
+            state[name] = container
+        self.state.write_text(json.dumps(state))
+        self.log.write_text("")
+        result = self.plugin("stop")
+        self.assertIn("Container matter-server Stopping", result.stderr)
+        self.assertIn("Container matter-server Stopped", result.stderr)
+        state = json.loads(self.state.read_text())
+        for name in ("matter-server", "retired"):
+            self.assertFalse(state[name]["State"]["Running"])
+        for name in ("oneoff", "unrelated"):
+            self.assertTrue(state[name]["State"]["Running"])
+        self.assertTrue(all("pull" not in command and "up" not in command for command in self.mutations()))
 
     def test_controller_fails_before_stopping_on_invalid_configuration(self):
         (self.main / "docker-compose.yml").write_text("services: [invalid]\n")

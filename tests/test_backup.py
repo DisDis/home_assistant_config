@@ -46,17 +46,22 @@ with ExitStack() as patches:
     if "TEST_FREE_BYTES" in os.environ:
         usage = shutil.disk_usage(script.parent)
         patches.enter_context(patch("shutil.disk_usage", return_value=usage._replace(free=int(os.environ["TEST_FREE_BYTES"]))))
-    if os.environ.get("TEST_REPORT_FAILURE"):
+    if os.environ.get("TEST_REPORT_FAILURE") or os.environ.get("TEST_PERMISSION_FAILURE"):
         module = runpy.run_path(str(script), run_name="backup_under_test")
-        original = module["atomic_json"]
-        failed = False
-        def save(path, report):
-            global failed
-            if report["stop_attempted"] and not failed:
-                failed = True
-                raise OSError(errno.ENOSPC, "simulated result write failure", str(path))
-            original(path, report)
-        module["main"].__globals__["atomic_json"] = save
+        if os.environ.get("TEST_REPORT_FAILURE"):
+            original = module["atomic_json"]
+            failed = False
+            def save(path, report):
+                global failed
+                if report["stop_attempted"] and not failed:
+                    failed = True
+                    raise OSError(errno.ENOSPC, "simulated result write failure", str(path))
+                original(path, report)
+            module["main"].__globals__["atomic_json"] = save
+        if os.environ.get("TEST_PERMISSION_FAILURE"):
+            def grant(self, output):
+                raise PermissionError(errno.EPERM, "simulated ownership failure", str(output))
+            module["BackupAccess"].grant = grant
         sys.exit(module["main"]())
     else:
         runpy.run_path(str(script), run_name="__main__")
@@ -88,7 +93,8 @@ with ExitStack() as patches:
         (self.bin / "docker").write_text('''#!/usr/bin/env python3
 import os, sys
 args = sys.argv[1:]
-if os.environ.get("FAIL_MAIN_STOP") and args[0] == "compose" and "stop" in args:
+if (os.environ.get("FAIL_MAIN_STOP") and args[0] == "compose" and "stop" in args
+        and os.environ["TEST_MAIN_DIR"] in args):
     print("simulated partial stop failure", file=sys.stderr)
     sys.exit(12)
 if os.environ.get("FAIL_RESTART") and os.path.exists(os.environ["TAR_MARKER"]):
@@ -132,6 +138,7 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             DOCKER_STUB=str(ROOT / "tests/fake_docker.py"),
             FAKE_DOCKER_LOG=str(self.docker_log), FAKE_DOCKER_STATE=str(self.state),
             TAR_MARKER=str(self.marker), TAR_EVENTS=str(self.events),
+            TEST_MAIN_DIR=str(self.main),
         )
         started = subprocess.run(["bash", str(self.system / "ha.sh"), "start"],
                                  env=self.env, capture_output=True, text=True)
@@ -203,6 +210,10 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertNotIn("Enabled services:", before_confirmation)
         self.assertIn("Enabled services:", result.stdout)
         self.assertIn("Enabled services:", (output / "backup.log").read_text())
+        for name in ("matter-server", "homeassistant"):
+            message = f"Container {name} Stopping"
+            self.assertIn(message, result.stdout + result.stderr)
+            self.assertIn(message, (output / "backup.log").read_text())
         report = json.loads((output / "result.json").read_text())
         self.assertEqual(report["status"], "success")
         self.assertEqual(report["backup_status"], "verified")
@@ -221,7 +232,9 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             self.assertEqual(item["status"], "verified")
             self.assertEqual(item["sha256"], hashlib.sha256((output / item["name"]).read_bytes()).hexdigest())
         mutations = self.mutations()
-        self.assertEqual(mutations[0][:3], ["stop", "-t", "60"])
+        self.assertEqual(mutations[0][0], "compose")
+        self.assertIn(str(self.plugins), mutations[0])
+        self.assertEqual(mutations[0][-6:], ["--profile", "*", "stop", "--timeout", "60", "matter-server"])
         self.assertIn("stop", mutations[1])
         self.assertIn(str(self.main), mutations[1])
         self.assertIn(str(self.main), mutations[2])
@@ -425,6 +438,21 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         for path in (self.root / "new-parent", destination.parent, destination, output, *output.iterdir()):
             self.assertEqual((path.stat().st_uid, path.stat().st_gid), (os.getuid(), os.getgid()))
             self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
+
+    def test_ownership_failure_is_logged_and_does_not_claim_success(self):
+        result = self.invoke(TEST_PERMISSION_FAILURE="1")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_running()
+        output = self.output_dir()
+        report = json.loads((output / "result.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["backup_status"], "verified")
+        self.assertEqual(report["services_status"], "running")
+        self.assertEqual(report["errors"][-1]["phase"], "permissions")
+        self.assertIn("simulated ownership failure", (output / "backup.log").read_text())
+        self.assertTrue((output / "FAILED").exists())
+        self.assertFalse((output / "SUCCESS").exists())
+        self.assertNotIn("Итог:     УСПЕХ", result.stdout)
 
 
 if __name__ == "__main__":

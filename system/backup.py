@@ -581,6 +581,13 @@ def finish(report, ui, started, code, output=None, access=None):
         except OSError as error:
             code = record_error(report, ui, error, "report")
             report.update(status="failed", exit_code=code)
+        if access:
+            try:
+                access.grant(output)
+            except (OSError, BackupError) as error:
+                ownership_code = record_error(report, ui, error, "permissions")
+                code = code or ownership_code
+                report.update(status="failed", exit_code=code)
     summary(ui, report, output)
     ui.close()
     # A write failure in the final summary must not leave a SUCCESS marker behind.
@@ -595,23 +602,12 @@ def finish(report, ui, started, code, output=None, access=None):
             (output / "SUCCESS").unlink(missing_ok=True)
             (output / "FAILED").write_text(now() + "\n", encoding="utf-8")
             atomic_json(output / "result.json", report)
-        except OSError:
+            if access:
+                # Atomic report replacement creates a new inode owned by root.
+                for name in ("FAILED", "result.json"):
+                    access.give(output / name)
+        except (OSError, BackupError):
             ui.error("Не удалось сохранить полный отчёт; проверьте диск и права каталога бэкапа")
-    if output and access:
-        with ignore_interrupts():
-            try:
-                access.grant(output)
-            except (OSError, BackupError) as error:
-                code = record_error(report, ui, error, "permissions") or code
-                report.update(status="failed", exit_code=code)
-                try:
-                    (output / "SUCCESS").unlink(missing_ok=True)
-                    (output / "FAILED").write_text(now() + "\n", encoding="utf-8")
-                    atomic_json(output / "result.json", report)
-                    for name in ("FAILED", "result.json"):
-                        access.give(output / name)
-                except (OSError, BackupError):
-                    ui.error("Не удалось сохранить доступный пользователю отчёт об ошибке прав")
     return code
 
 

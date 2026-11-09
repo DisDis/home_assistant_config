@@ -58,8 +58,11 @@ if args[0] == "compose":
         for c in state.values():
             labels = c["Config"]["Labels"]
             if (labels["com.docker.compose.project"] == config["name"]
-                    and labels["com.docker.compose.service"] in selected):
+                    and labels["com.docker.compose.service"] in selected
+                    and labels.get("com.docker.compose.oneoff", "false").lower() != "true"):
+                print(f"Container {c['Name'].lstrip('/')} Stopping", file=sys.stderr)
                 c["State"] = {"Running": False, "Status": "exited"}
+                print(f"Container {c['Name'].lstrip('/')} Stopped", file=sys.stderr)
         save()
     elif operation == "ps":
         for c in state.values():
