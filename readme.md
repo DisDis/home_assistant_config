@@ -30,7 +30,9 @@
   - [Перенос хранилища Matter](#перенос-хранилища-matter)
 - [Известные особенности текущей конфигурации](#известные-особенности-текущей-конфигурации)
 - [Инструменты сервера](#инструменты-сервера)
+- [Автозапуск после перезагрузки](#автозапуск-после-перезагрузки)
 - [Обслуживание](#обслуживание)
+  - [Обновление существующей установки](#обновление-существующей-установки)
 - [Проверка перед публикацией](#проверка-перед-публикацией)
 
 ## Сервер и локальная сеть
@@ -168,9 +170,10 @@ docker run --rm hello-world
 Следующий блок выполняется **на компьютере, в корне репозитория**. Если репозиторий уже находится на Raspberry Pi в рабочем каталоге, пропустите копирование.
 
 ```bash
-ssh hauser@192.0.2.10 'mkdir -p /home/hauser/homeassistant/examples'
+ssh hauser@192.0.2.10 'mkdir -p /home/hauser/homeassistant/examples /home/hauser/homeassistant/system'
 scp docker-compose.yml .env.example .gitignore readme.md hauser@192.0.2.10:/home/hauser/homeassistant/
 scp examples/mosquitto.conf.example hauser@192.0.2.10:/home/hauser/homeassistant/examples/
+scp system/autostart.sh hauser@192.0.2.10:/home/hauser/homeassistant/system/
 ```
 
 Далее подключитесь к Raspberry Pi:
@@ -485,6 +488,35 @@ HA и Zigbee2MQTT получают часовой пояс хоста через
 
 Конфигурации инструментов хранятся отдельно в [tools/README.md](tools/README.md). Для них используется пример каталога `/home/hauser/tools`: Portainer CE в собственном Compose-проекте и Cockpit как пакет Debian. Compose Uptime Kuma сохранён с закомментированным сервисом. Инструкция описывает копирование шаблонов, создание локальных файлов, настройку адресов панелей, включение мониторинга, обновление и резервное копирование. Пароли и рабочие базы в Git не сохраняются.
 
+## Автозапуск после перезагрузки
+
+Автозапуск обеспечивает Docker: службы `docker.service` и `containerd.service` включены при загрузке, а у всех включённых сервисов Compose задано `restart: unless-stopped`. Docker восстанавливает созданные контейнеры после перезагрузки и перезапускает их при завершении процесса. Отдельные unit-файлы systemd для контейнеров не требуются. См. [правила перезапуска Docker](https://docs.docker.com/engine/containers/start-containers-automatically/).
+
+После подготовки рабочих конфигураций и загрузки образов выполните **на сервере**:
+
+```bash
+bash /home/hauser/homeassistant/system/autostart.sh /home/hauser/homeassistant /home/hauser/tools
+```
+
+Скрипт [system/autostart.sh](system/autostart.sh) проверяет Compose, при необходимости включает и запускает службы Docker через `sudo`, выполняет `docker compose up -d --pull never` для основного стека и Portainer, затем проверяет состояние и политику перезапуска каждого контейнера. Kuma запускается только при наличии включённых сервисов в её Compose; пустой `services: {}` пропускается. Образы скрипт не обновляет: при их отсутствии сначала выполните `docker compose pull` в соответствующем проекте.
+
+Пути можно передать явно, как выше. Без аргументов основной каталог определяется по расположению скрипта, а `tools` ищется внутри проекта либо рядом с ним. Локальный `.env` каждого проекта имеет приоритет; если у инструмента его нет, скрипт использует общий `tools/.env`. Секреты, настройки Cockpit и рабочие данные скрипт не изменяет.
+
+Проверка без изменений, в том числе после перезагрузки:
+
+```bash
+bash /home/hauser/homeassistant/system/autostart.sh --check /home/hauser/homeassistant /home/hauser/tools
+systemctl is-enabled docker.service containerd.service
+systemctl is-active docker.service containerd.service
+docker ps --format 'table {{.Names}}\t{{.Status}}'
+```
+
+`running` и включённая политика перезапуска подтверждают состояние контейнера; готовность приложений проверяйте отдельно по журналам и веб-интерфейсам. Для Cockpit используется ранее настроенный `cockpit.socket`; он не входит в Docker-стек.
+
+При `unless-stopped` контейнер, остановленный вручную через `docker stop` или `docker compose stop`, остаётся остановленным и после перезагрузки. Для возвращения в работу выполните `docker compose up -d` в его проекте либо повторно запустите скрипт без `--check`. После `docker compose down` контейнеров нет: Docker не создаёт их при загрузке, нужен новый `up -d`. Отключённые Cloud Commander и Kuma автоматически не включаются.
+
+Для проверки полного цикла можно выполнить `sudo reboot`, дождаться доступности SSH и повторить команды проверки. Если контейнер не запустился, проверьте `journalctl -u docker.service -b`, `docker compose ps -a` и `docker compose logs --tail 100` в его каталоге. Для Zigbee проверьте наличие координатора, для панелей — доступность адреса из `TOOLS_BIND_IP`.
+
 ## Обслуживание
 
 Команды выполняются на Raspberry Pi:
@@ -499,6 +531,40 @@ docker compose logs --tail 100 zigbee2mqtt mosquitto
 ```
 
 Для резервного копирования Matter нужно сохранять весь каталог `matter-data/`; согласованный снимок следует делать при остановленном Matter Server. Каталог `backups/` содержит приватные данные Matter-сети и доступен владельцу. PIN-коды Matter, MQTT-пароли и содержимое приватных ключей в README не сохраняются.
+
+### Обновление существующей установки
+
+С компьютера передавайте только публичные файлы командами из [раздела копирования](#копирование-файлов-на-сервер) и [инструкции инструментов](tools/README.md#копирование-конфигурации-на-сервер). Не копируйте поверх сервера локальные `.env`, `config/`, `matter-data/`, `zigbee2mqtt-data/`, `mosquitto/`, `data/`, `secrets/` и настройки Cockpit. Перед заменой Compose сохраните прежние файлы в приватном `backups/` на сервере.
+
+Проверьте, что специфические параметры прежнего Compose перенесены в серверные `.env`: путь Zigbee, интерфейс и Bluetooth Matter, адрес панелей и учётные данные редактора. Compose автоматически читает `.env` из каталога проекта; общий `/home/hauser/tools/.env` для ручных команд указывайте через `--env-file` либо один раз скопируйте в `portainer/.env`, если его ещё нет. Существующий файл не перезаписывайте.
+
+В SSH-сеансе проверьте конфигурации и загрузите образы, пока сервисы ещё работают:
+
+```bash
+cd /home/hauser/homeassistant
+docker compose config --quiet
+docker compose pull
+cd /home/hauser/tools/portainer
+if [ ! -e .env ] && [ -f ../.env ]; then
+  (umask 077; cp ../.env .env)
+fi
+docker compose config --quiet
+docker compose pull
+```
+
+Перед применением остановите оба проекта через `docker compose stop --timeout 60` в соответствующих каталогах и сделайте согласованную резервную копию основного стека и `portainer/data/` вместе с локальными настройками и секретами. Каталоги `backups/` исключите из архива; храните его с правами `600`. Если копирование не удалось, сначала верните контейнеры в работу через `docker compose start`.
+
+Затем примените Compose, пересоздайте контейнеры с сохранением подключённых каталогов и проверьте автозапуск:
+
+```bash
+cd /home/hauser/homeassistant
+docker compose up -d --pull never --force-recreate
+cd /home/hauser/tools/portainer
+docker compose up -d --pull never --force-recreate
+bash /home/hauser/homeassistant/system/autostart.sh /home/hauser/homeassistant /home/hauser/tools
+```
+
+Проверьте HA (`8123`), Zigbee2MQTT (`8080`), File Editor (`3218`, без входа ожидается `401`), Portainer (`9443/api/status`), MQTT (`1883`) и Matter (`5580`). Сверьте журналы с состоянием до обновления и убедитесь, что прежние интеграции и устройства доступны. Данные сохраняются в прежних каталогах; для отката после миграции формата данных могут понадобиться и прежние образы, и резервная копия. Старые образы не удаляйте до окончания проверки.
 
 ## Проверка перед публикацией
 
