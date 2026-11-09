@@ -25,7 +25,7 @@ class PluginTests(unittest.TestCase):
         shutil.copy(ROOT / "plugins/docker-compose.yml", self.plugins)
         self.system = self.root / "homeassistant/system"
         self.system.mkdir(parents=True)
-        for name in ("plugins.py", "plugins.sh", "autostart.sh"):
+        for name in ("ha.sh", "plugins.py", "plugins.sh", "autostart.sh"):
             shutil.copy(ROOT / "system" / name, self.system)
         shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.system.parent)
         (self.system.parent / "config").mkdir()
@@ -76,7 +76,7 @@ class PluginTests(unittest.TestCase):
 
     def mutations(self):
         return [c for c in self.commands() if c[0] in ("stop", "rm")
-                or c[0] == "compose" and ("up" in c or "pull" in c)]
+                or c[0] == "compose" and ("up" in c or "pull" in c or "stop" in c)]
 
     def managed(self):
         return {c["Config"]["Labels"]["com.docker.compose.service"]
@@ -257,6 +257,7 @@ class PluginTests(unittest.TestCase):
         self.plugin("apply")
         self.command(["docker", "compose", "--project-directory", str(self.root / "tools/portainer"),
                       "--env-file", os.devnull, "up", "-d", "--pull", "never"])
+        (self.root / ".env").write_text("COMPOSE_PROFILES=wrong\n")
         self.log.write_text("")
         self.command(["bash", "-ec", script("Остановка всей системы")])
         state = json.loads(self.state.read_text())
@@ -264,9 +265,10 @@ class PluginTests(unittest.TestCase):
             project = c["Config"]["Labels"]["com.docker.compose.project"]
             self.assertEqual(c["State"]["Running"], project == "tools-portainer")
         commands = self.commands()
-        stops = [c for c in commands if c[0] == "compose" and "stop" in c]
-        self.assertIn("--profile", stops[0])
-        self.assertIn("*", stops[0])
+        stops = [c for c in commands if c[0] == "stop" or c[0] == "compose" and "stop" in c]
+        self.assertEqual(stops[0], ["stop", "--time", "60", "ha-plugins_matter-server"])
+        self.assertEqual(stops[1][0], "compose")  # Plugins stop before the main stack.
+        self.assertIn(str(self.system.parent), stops[1])
         self.assertFalse(any("pull" in c or "up" in c or c[0] == "rm" for c in commands))
         for action in ("Запуск после остановки", "Перезапуск всей системы"):
             self.log.write_text("")
@@ -279,6 +281,42 @@ class PluginTests(unittest.TestCase):
             self.assertNotIn("--project-name", starts[0])  # Main stack starts before plugins.
             if profiles:
                 self.assertIn("--project-name", starts[-1])
+        self.log.write_text("")
+        self.command(["bash", "-ec", script("Проверка и расположение каталогов")])
+        self.assertFalse(self.mutations())
+
+    def test_controller_fails_before_stopping_on_invalid_configuration(self):
+        (self.system.parent / "docker-compose.yml").write_text("services: [invalid]\n")
+        self.command(["bash", str(self.system / "ha.sh"), "restart"], success=False)
+        self.assertFalse(self.mutations())
+
+    def test_controller_does_not_start_plugins_when_main_start_fails(self):
+        self.select(("matter-server",))
+        self.command(["bash", str(self.system / "ha.sh"), "start"], success=False,
+                     env=dict(self.env, FAKE_FAIL_UP="1"))
+        starts = [c for c in self.commands() if c[0] == "compose" and "up" in c]
+        self.assertEqual(len(starts), 1)
+        self.assertIn(str(self.system.parent), starts[0])
+        self.assertEqual(json.loads(self.state.read_text()), {})
+
+    def test_controller_help_and_unknown_action_do_not_access_docker(self):
+        self.command(["bash", str(self.system / "ha.sh"), "--help"])
+        self.command(["bash", str(self.system / "ha.sh"), "invalid"], success=False)
+        self.assertEqual(self.commands(), [])
+
+    def test_autostart_delegates_to_controller(self):
+        self.select(("matter-server",))
+        args = ["bash", str(self.system / "autostart.sh"), str(self.system.parent),
+                str(self.root / "tools"), str(self.plugins)]
+        self.command(args)
+        starts = [c for c in self.commands() if c[0] == "compose" and "up" in c]
+        self.assertIn(str(self.system.parent), starts[0])
+        self.assertIn(str(self.plugins), starts[1])
+        self.assertIn(str(self.root / "tools/portainer"), starts[2])
+        self.assertFalse(any("pull" in c for c in self.commands() if c[0] == "compose"))
+        self.log.write_text("")
+        self.command(args[:2] + ["--check"] + args[2:])
+        self.assertFalse(self.mutations())
 
     def test_default_directory_is_independent_of_cwd_and_preserves_dollar_password(self):
         secret = "test-only-$literal#value"

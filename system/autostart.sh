@@ -37,7 +37,7 @@ else
   plugins_dir=$(dirname -- "$main_dir")/plugins
 fi
 plugins_dir=$(cd -- "$plugins_dir" && pwd)
-projects=("$main_dir" "$tools_dir/portainer")
+projects=("$tools_dir/portainer")
 if [[ -f "$tools_dir/uptime-kuma/docker-compose.yml" ]]; then
   projects+=("$tools_dir/uptime-kuma")
 fi
@@ -59,7 +59,7 @@ compose() {
 
 # Validate every template before changing services or containers.
 docker compose version >/dev/null
-for project_dir in "${projects[@]}"; do
+for project_dir in "$main_dir" "${projects[@]}"; do
   compose "$project_dir" config --quiet
 done
 bash "$script_dir/plugins.sh" validate "$plugins_dir"
@@ -82,6 +82,12 @@ for unit in containerd.service docker.service; do
 done
 
 docker info >/dev/null
+
+if "$check_only"; then
+  bash "$script_dir/ha.sh" check "$main_dir" "$plugins_dir"
+else
+  bash "$script_dir/ha.sh" start "$main_dir" "$plugins_dir"
+fi
 
 for project_dir in "${projects[@]}"; do
   services=$(compose "$project_dir" config --services)
@@ -110,10 +116,3 @@ for project_dir in "${projects[@]}"; do
     done <<< "$ids"
   done <<< "$services"
 done
-
-# Main stack is already running; Compose selects optional services from profiles.
-if "$check_only"; then
-  bash "$script_dir/plugins.sh" check "$plugins_dir"
-else
-  bash "$script_dir/plugins.sh" start "$plugins_dir"
-fi

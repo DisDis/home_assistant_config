@@ -171,7 +171,7 @@ ssh hauser@192.0.2.10 'mkdir -p /home/hauser/homeassistant/examples /home/hauser
 scp homeassistant/docker-compose.yml homeassistant/.env.example hauser@192.0.2.10:/home/hauser/homeassistant/
 scp .gitignore readme.md hauser@192.0.2.10:/home/hauser/homeassistant/
 scp examples/mosquitto.conf.example hauser@192.0.2.10:/home/hauser/homeassistant/examples/
-scp system/autostart.sh system/plugins.sh system/plugins.py hauser@192.0.2.10:/home/hauser/homeassistant/system/
+scp system/autostart.sh system/ha.sh system/plugins.sh system/plugins.py hauser@192.0.2.10:/home/hauser/homeassistant/system/
 scp plugins/docker-compose.yml plugins/.env.example plugins/README.md hauser@192.0.2.10:/home/hauser/plugins/
 scp plugins/yandex-smart-home/README.md hauser@192.0.2.10:/home/hauser/plugins/yandex-smart-home/
 scp plugins/zigbee2mqtt/README.md hauser@192.0.2.10:/home/hauser/plugins/zigbee2mqtt/
@@ -334,47 +334,48 @@ HA и Zigbee2MQTT получают часовой пояс хоста через
 
 ## Управление всей системой
 
-Команды ниже управляют Home Assistant, Mosquitto и контейнерными плагинами. Выполняйте их на сервере после первоначальной настройки и скачивания образов. Примеры используют соседние каталоги `/home/hauser/homeassistant` и `/home/hauser/plugins`. Portainer, Uptime Kuma и Cockpit обслуживаются отдельно по [инструкции инструментов](tools/README.md).
+Единый скрипт [system/ha.sh](system/ha.sh) управляет Home Assistant, Mosquitto и контейнерными плагинами. Выполняйте команды на сервере после первоначальной настройки и скачивания образов. В примере скрипты находятся в `/home/hauser/homeassistant/system/`. В клоне репозитория используйте `bash system/ha.sh start` из корня либо абсолютный путь к скрипту; рабочий каталог терминала на выбор конфигурации не влияет.
 
 ### Остановка всей системы
 
-Сначала остановите все контейнерные плагины, затем основной стек:
-
 ```bash
-cd /home/hauser/plugins
-docker compose --profile '*' stop --timeout 60
-cd /home/hauser/homeassistant
-docker compose stop --timeout 60
+bash /home/hauser/homeassistant/system/ha.sh stop
 ```
 
-`--profile '*'` здесь охватывает также контейнеры ранее включённых профилей и ничего не запускает и не скачивает. `stop` сохраняет контейнеры, данные и образы. При `restart: unless-stopped` вручную остановленные контейнеры остаются остановленными и после перезагрузки хоста.
+Сначала останавливаются контейнеры проекта плагинов, затем HA и Mosquitto. Останавливаются также оставшиеся контейнеры отключённых или удалённых из Compose сервисов своего проекта; одноразовые `docker compose run` пропускаются. Контейнеры, данные и образы сохраняются. При `restart: unless-stopped` вручную остановленные контейнеры остаются остановленными после перезагрузки хоста.
 
 ### Запуск после остановки
 
-Сначала запустите HA и MQTT, затем плагины, выбранные в текущем `plugins/.env`:
-
 ```bash
-cd /home/hauser/homeassistant
-docker compose up -d --pull never
-bash /home/hauser/homeassistant/system/plugins.sh start /home/hauser/plugins
+bash /home/hauser/homeassistant/system/ha.sh start
 ```
 
-`start` применяет текущие профили, удаляет оставшиеся отключённые контейнеры своего проекта с сохранением данных и запускает выбранные. Образы не скачиваются. Если впервые включили плагин и его образа ещё нет, выполните `plugins.sh apply` вместо `start` при уже работающем основном стеке.
+Сначала запускаются HA и Mosquitto, затем плагины из текущего `plugins/.env`. Скрипт использует `plugins.sh start`: оставшиеся отключённые контейнеры удаляются с сохранением данных, выбранные запускаются. Образы не скачиваются и не обновляются. Для впервые включённого плагина без скачанного образа выполните `plugins.sh apply /home/hauser/plugins` при работающем основном стеке; загрузка образов относится к установке и обновлению.
 
 ### Перезапуск всей системы
 
-Для полного цикла остановки и запуска выполните:
-
 ```bash
-cd /home/hauser/plugins
-docker compose --profile '*' stop --timeout 60
-cd /home/hauser/homeassistant
-docker compose stop --timeout 60
-docker compose up -d --pull never
-bash /home/hauser/homeassistant/system/plugins.sh start /home/hauser/plugins
+bash /home/hauser/homeassistant/system/ha.sh restart
 ```
 
-Этот порядок заново запускает основной стек перед выбранными плагинами и применяет изменения Compose и `.env`. Обычный `docker compose restart` не перечитывает настройки Compose и не применяет выбор новых профилей. Для проверки выполните `docker compose ps` в основном каталоге и `plugins.sh check /home/hauser/plugins`.
+Скрипт останавливает плагины, затем основной стек, после чего запускает основной стек и выбранные плагины. Используется `docker compose up`, поэтому изменения Compose и `.env` применяются. Обычный `docker compose restart` не перечитывает настройки Compose и не применяет выбор новых профилей.
+
+### Проверка и расположение каталогов
+
+```bash
+bash /home/hauser/homeassistant/system/ha.sh check
+```
+
+`check` проверяет состояние основного стека и выбранных плагинов без изменений. Состав плагинов читается из Compose; имена приложений и проверки их настроек в управляющем скрипте не задаются. Локальный `.env` каждого проекта читается явно. Перед запуском, остановкой и перезапуском проверяется разбор обоих Compose; при ошибке команда завершается с ненулевым кодом. При частичном сбое запуска уже запущенные сервисы продолжают работать: исправьте причину и повторите `start`.
+
+Пути определяются относительно расположения скрипта: `system/` в корне репозитория либо `homeassistant/system/` на сервере. Для другого размещения передайте основной каталог и каталог плагинов явно:
+
+```bash
+bash /home/hauser/homeassistant/system/ha.sh restart /home/hauser/homeassistant /home/hauser/plugins
+bash /home/hauser/homeassistant/system/ha.sh --help
+```
+
+Скрипт требует работающий Docker и не изменяет системные службы. Portainer, Uptime Kuma и Cockpit обслуживаются отдельно по [инструкции инструментов](tools/README.md). Подготовка автозапуска Docker и проверка инструментов выполняются через `autostart.sh` из следующего раздела.
 
 ## Автозапуск после перезагрузки
 
@@ -387,9 +388,9 @@ bash /home/hauser/homeassistant/system/plugins.sh apply /home/hauser/plugins
 bash /home/hauser/homeassistant/system/autostart.sh /home/hauser/homeassistant /home/hauser/tools /home/hauser/plugins
 ```
 
-[system/autostart.sh](system/autostart.sh) сначала проверяет все Compose и выбор профилей плагинов. Затем при необходимости включает службы Docker через `sudo`, запускает основной стек и инструменты с `--pull never` и проверяет состояние контейнеров. После основного стека вызывает `plugins.sh start`: только выбранные плагины запускаются, отключённые контейнеры проекта `ha-plugins` удаляются с сохранением данных. Подключение к MQTT и параметры приложений настраиваются самими пользователями; в Python нет привязки к отдельным плагинам. Пустая Kuma пропускается. Обновлений и скачивания образов автозапуск не выполняет; первый запуск и обновления плагинов делаются через `plugins.sh apply` при уже работающем основном стеке.
+[system/autostart.sh](system/autostart.sh) сначала проверяет все Compose и выбор профилей плагинов. Затем при необходимости включает службы Docker через `sudo`, вызывает `ha.sh start` для HA и выбранных плагинов, запускает инструменты с `--pull never` и проверяет состояние контейнеров. Режим `--check` использует `ha.sh check` и отдельно проверяет инструменты. Подключение к MQTT и параметры приложений настраиваются самими пользователями; в Python нет привязки к отдельным плагинам. Пустая Kuma пропускается. Обновлений и скачивания образов автозапуск не выполняет; первый запуск и обновления плагинов делаются через `plugins.sh apply` при уже работающем основном стеке.
 
-Первые два аргумента остались совместимы с прежней командой, третий задаёт каталог плагинов. Без аргументов в репозитории выбираются соседние `homeassistant/`, `tools/`, `plugins/`; при копировании в `homeassistant/system/` — основной каталог и соседние `tools/`, `plugins/`. Проекты инструментов используют свой `.env` либо общий `tools/.env`; плагины используют только `plugins/.env`. Скрипты `plugins.sh` и `plugins.py` нужно копировать вместе с `autostart.sh`. Python 3.9+ обязателен.
+Первые два аргумента остались совместимы с прежней командой, третий задаёт каталог плагинов. Без аргументов в репозитории выбираются соседние `homeassistant/`, `tools/`, `plugins/`; при копировании в `homeassistant/system/` — основной каталог и соседние `tools/`, `plugins/`. Проекты инструментов используют свой `.env` либо общий `tools/.env`; плагины используют только `plugins/.env`. Скрипты `ha.sh`, `plugins.sh` и `plugins.py` нужно копировать вместе с `autostart.sh`. Python 3.9+ обязателен.
 
 Проверка без изменений:
 

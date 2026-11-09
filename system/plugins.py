@@ -104,6 +104,13 @@ class Plugins:
                     raise PluginError(f"{service}: container is not healthy")
             print(f"{service}: running, restart policy checked")
 
+    def stop(self):
+        # Stop the entire managed project, including no-longer-selected services.
+        found = self.containers()
+        if found:
+            run(["docker", "stop", "--time", "60", *[c["Id"] for c in found]], capture=False)
+        print("Plugin containers: stopped; data and containers preserved")
+
     def apply(self, *, pull):
         found = self.containers()
         if self.services and pull:
@@ -123,8 +130,8 @@ class Plugins:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("validate", "check", "apply", "start"),
-                        help="validate: Compose only; check: read-only; apply: pull and reconcile; start: no pull")
+    parser.add_argument("action", choices=("validate", "check", "apply", "start", "stop"),
+                        help="validate: Compose only; check: read-only; apply: pull and reconcile; start: no pull; stop: preserve containers")
     root = Path(__file__).resolve().parents[1]
     default_dir = root / "plugins" if (root / "homeassistant/docker-compose.yml").is_file() else root.parent / "plugins"
     parser.add_argument("directory", nargs="?", default=default_dir)
@@ -134,6 +141,8 @@ def main():
         plugins.validate()
         if args.action == "check":
             plugins.check()
+        elif args.action == "stop":
+            plugins.stop()
         elif args.action in ("apply", "start"):
             plugins.apply(pull=args.action == "apply")
     except (PluginError, OSError, ValueError, KeyError) as error:
