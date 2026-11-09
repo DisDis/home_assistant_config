@@ -28,25 +28,10 @@ services:
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
     restart: unless-stopped
+    networks:
+      - ha-backend
 
-  # 3. Zigbee2MQTT (пробросьте ваш стик cc2652)
-  zigbee2mqtt:
-    container_name: zigbee2mqtt
-    image: koenkk/zigbee2mqtt:latest
-    restart: unless-stopped
-    volumes:
-      - ./zigbee2mqtt-data:/app/data
-      - /etc/localtime:/etc/localtime:ro
-    ports:
-      - "8080:8080"
-    privileged: true
-    devices:
-      # Замените на ваш конкретный путь к стику (лучше использовать /dev/serial/by-id/...)
-      - ${ZIGBEE_ADAPTER_PATH:-/dev/ttyUSB0}:/dev/ttyUSB0
-    depends_on:
-      - mosquitto
-
-  # 4. Matter Server (для поддержки Matter-устройств)
+  # 3. Matter Server (для поддержки Matter-устройств)
   matter-server:
     container_name: matter-server
     image: ghcr.io/home-assistant-libs/python-matter-server:stable
@@ -78,32 +63,6 @@ services:
     extra_hosts:
       - "on.dcl.csa-iot.org:127.0.0.1"
 
-  # 5. Cloud Commander отключён 2026-11-08: контейнер и образ удалены.
-  # cloud-commander:
-  #   container_name: cloud-commander
-  #   image: coderaiser/cloudcmd:latest
-  #   ports:
-  #     - "8001:8000"
-  #   environment:
-  #     CLOUDCMD_AUTH: "true"
-  #     CLOUDCMD_USERNAME: "${CLOUDCMD_USERNAME:?Set CLOUDCMD_USERNAME in .env}"
-  #     CLOUDCMD_PASSWORD: "${CLOUDCMD_PASSWORD:?Set CLOUDCMD_PASSWORD in .env}"
-  #   volumes:
-  #     - ./config:/root/config # Общий каталог конфигурации HA
-  #   restart: unless-stopped
-
-  # 6. HASS Configurator (File Editor)
-  hass-configurator:
-    container_name: hass-configurator
-    image: causticlab/hass-configurator-docker:latest
-    ports:
-      - "3218:3218"
-    environment:
-      HC_BASEPATH: /hass-config
-      HC_ENFORCE_BASEPATH: "true"
-      HC_USERNAME: "${HC_USERNAME:?Set HC_USERNAME in .env}"
-      HC_PASSWORD: "${HC_PASSWORD:?Set HC_PASSWORD in .env}"
-    volumes:
-      - ./hass-configurator-config:/config # Настройки самого редактора (settings.conf)
-      - ./config:/hass-config # Общий каталог конфигурации Home Assistant
-    restart: unless-stopped
+networks:
+  ha-backend:
+    name: ${HA_BACKEND_NETWORK:-ha-backend}

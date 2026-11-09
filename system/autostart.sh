@@ -7,8 +7,8 @@ if [[ ${1:-} == --check ]]; then
   check_only=true
   shift
 fi
-if [[ $# -gt 2 || ${1:-} == --help ]]; then
-  printf 'Usage: %s [--check] [HOMEASSISTANT_DIR [TOOLS_DIR]]\n' "$0"
+if [[ $# -gt 3 || ${1:-} == --help ]]; then
+  printf 'Usage: %s [--check] [HOMEASSISTANT_DIR [TOOLS_DIR [PLUGINS_DIR]]]\n' "$0"
   exit 2
 fi
 
@@ -31,6 +31,12 @@ else
   tools_dir=$(dirname -- "$main_dir")/tools
 fi
 tools_dir=$(cd -- "$tools_dir" && pwd)
+if [[ $# -ge 3 ]]; then
+  plugins_dir=$3
+else
+  plugins_dir=$(dirname -- "$main_dir")/plugins
+fi
+plugins_dir=$(cd -- "$plugins_dir" && pwd)
 projects=("$main_dir" "$tools_dir/portainer")
 if [[ -f "$tools_dir/uptime-kuma/docker-compose.yml" ]]; then
   projects+=("$tools_dir/uptime-kuma")
@@ -45,6 +51,8 @@ compose() {
   elif [[ "$project_dir" != "$main_dir" && -f "$tools_dir/.env" ]]; then
     # Existing installations can keep a shared tools/.env.
     args+=(--env-file "$tools_dir/.env")
+  else
+    args+=(--env-file /dev/null)
   fi
   docker compose "${args[@]}" "$@"
 }
@@ -54,6 +62,7 @@ docker compose version >/dev/null
 for project_dir in "${projects[@]}"; do
   compose "$project_dir" config --quiet
 done
+bash "$script_dir/plugins.sh" validate "$plugins_dir"
 
 if ! "$check_only"; then
   for unit in containerd.service docker.service; do
@@ -71,6 +80,7 @@ for unit in containerd.service docker.service; do
   systemctl is-active --quiet "$unit"
   printf '%s: enabled, active\n' "$unit"
 done
+
 docker info >/dev/null
 
 for project_dir in "${projects[@]}"; do
@@ -100,3 +110,10 @@ for project_dir in "${projects[@]}"; do
     done <<< "$ids"
   done <<< "$services"
 done
+
+# Main stack is already running; Compose selects optional services from profiles.
+if "$check_only"; then
+  bash "$script_dir/plugins.sh" check "$plugins_dir"
+else
+  bash "$script_dir/plugins.sh" start "$plugins_dir"
+fi

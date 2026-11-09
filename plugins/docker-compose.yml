@@ -1,0 +1,60 @@
+name: ha-plugins
+
+x-enabled-profiles: ${COMPOSE_PROFILES:-}
+
+x-plugin-logging: &plugin-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  zigbee2mqtt:
+    profiles: [zigbee2mqtt]
+    container_name: zigbee2mqtt
+    image: ${ZIGBEE2MQTT_IMAGE:-koenkk/zigbee2mqtt:2.14.3}
+    restart: unless-stopped
+    volumes:
+      - ./zigbee2mqtt/data:/app/data
+      - /etc/localtime:/etc/localtime:ro
+      - /run/udev:/run/udev:ro
+    devices:
+      - ${ZIGBEE_ADAPTER_PATH:-/dev/ttyUSB0}:/dev/ttyUSB0
+    ports:
+      - "${PLUGINS_BIND_IP:-127.0.0.1}:${ZIGBEE2MQTT_PORT:-8080}:8080"
+    networks:
+      - ha-backend
+    logging: *plugin-logging
+
+  hass-configurator:
+    profiles: [hass-configurator]
+    container_name: hass-configurator
+    image: ${HASS_CONFIGURATOR_IMAGE:-causticlab/hass-configurator-docker:0.6.0}
+    restart: unless-stopped
+    ports:
+      - "${PLUGINS_BIND_IP:-127.0.0.1}:${HASS_CONFIGURATOR_PORT:-3218}:3218"
+    environment:
+      HC_BASEPATH: /hass-config
+      HC_ENFORCE_BASEPATH: "true"
+      # The application startup guard checks these only when this service starts.
+      HC_USERNAME: "${HC_USERNAME:-}"
+      HC_PASSWORD: "${HC_PASSWORD:-}"
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        : "$${HC_USERNAME:?Set HC_USERNAME in plugins/.env}"
+        : "$${HC_PASSWORD:?Set HC_PASSWORD in plugins/.env}"
+        exec /app/run.sh
+    volumes:
+      - ./hass-configurator/data:/config
+      - type: bind
+        source: ${HA_DIR:-../homeassistant}/config
+        target: /hass-config
+        bind:
+          create_host_path: false
+    logging: *plugin-logging
+
+networks:
+  ha-backend:
+    external: true
+    name: ${HA_BACKEND_NETWORK:-ha-backend}
