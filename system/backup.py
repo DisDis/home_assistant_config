@@ -4,7 +4,7 @@
 import argparse
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import errno
 import fcntl
@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pty
 import selectors
 import shlex
 import shutil
@@ -20,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import traceback
 
@@ -55,6 +57,58 @@ class ArchiveTask:
     paths: list
 
 
+@dataclass
+class BackupAccess:
+    uid: int
+    gid: int
+    created_parents: list = field(default_factory=list)
+
+    @classmethod
+    def caller(cls):
+        uid, gid = os.getuid(), os.getgid()
+        sudo = (os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID"))
+        if os.geteuid() == 0 and any(value is not None for value in sudo):
+            if not all(value is not None and value.isdecimal() for value in sudo):
+                raise BackupError("Некорректные SUDO_UID/SUDO_GID: невозможно определить владельца бэкапа")
+            uid, gid = map(int, sudo)
+            if max(uid, gid) >= 2**32 - 1:
+                raise BackupError("SUDO_UID/SUDO_GID выходят за допустимый диапазон")
+        return cls(uid, gid)
+
+    def create_output(self, backups_dir, timestamp):
+        parent = backups_dir
+        while not parent.exists():
+            self.created_parents.append(parent)
+            parent = parent.parent
+        backups_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        output = backups_dir / timestamp
+        output.mkdir(mode=0o700)
+        return output
+
+    def give(self, path):
+        # Change the outer artifact only; never follow a link or unpack an archive.
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        try:
+            mode = os.fstat(fd).st_mode
+            if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+                raise BackupError(f"Неожиданный объект в каталоге бэкапа: {path}")
+            os.fchown(fd, self.uid, self.gid)
+            os.fchmod(fd, 0o700 if stat.S_ISDIR(mode) else 0o600)
+        finally:
+            os.close(fd)
+
+    def grant(self, output):
+        errors = []
+        paths = [*output.iterdir(), output, output.parent, *self.created_parents]
+        for path in dict.fromkeys(paths):
+            try:
+                self.give(path)
+            except (OSError, BackupError) as error:
+                errors.append(f"{path}: {error}")
+        if errors:
+            raise BackupError("Не удалось передать пользователю доступ ко всем файлам бэкапа", details=errors)
+
+
 def now():
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -87,16 +141,40 @@ def ignore_interrupts():
             signal.signal(sig, handler)
 
 
-def run(args, ui, label, *, discard_stdout=False, progress_file=None):
+def run(args, ui, label, *, discard_stdout=False, progress_file=None, native=False):
     """Keep stdout/stderr separate; preserve every line and group failure details."""
-    env = dict(os.environ, NO_COLOR="1", COMPOSE_ANSI="never", PYTHONUNBUFFERED="1")
-    process = subprocess.Popen(
-        [str(arg) for arg in args], env=env, start_new_session=True,
-        stdout=subprocess.DEVNULL if discard_stdout else subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    streams = [(process.stderr, "STDERR")]
-    if process.stdout is not None:
-        streams.append((process.stdout, "STDOUT"))
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    if not native or ui.plain:
+        env.update(NO_COLOR="1", COMPOSE_ANSI="never")
+    master = slave = None
+    ui.clear()
+    try:
+        if native and ui.tty and sys.stderr.isatty():
+            master, slave = pty.openpty()
+            size = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, size)
+            attributes = termios.tcgetattr(slave)
+            attributes[1] &= ~termios.OPOST
+            termios.tcsetattr(slave, termios.TCSANOW, attributes)
+        process = subprocess.Popen(
+            [str(arg) for arg in args], env=env, start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=slave if slave is not None else subprocess.DEVNULL if discard_stdout else subprocess.PIPE,
+            stderr=slave if slave is not None else subprocess.PIPE,
+        )
+    except BaseException:
+        if master is not None:
+            os.close(master)
+        raise
+    finally:
+        if slave is not None:
+            os.close(slave)
+    if master is not None:
+        streams = [(os.fdopen(master, "rb", buffering=0), "DOCKER")]
+    else:
+        streams = [(process.stderr, "STDERR")]
+        if process.stdout is not None:
+            streams.append((process.stdout, "STDOUT"))
     pending = {channel: b"" for _stream, channel in streams}
     tail = deque(maxlen=12)
     errors = deque(maxlen=20)
@@ -107,11 +185,11 @@ def run(args, ui, label, *, discard_stdout=False, progress_file=None):
         line = line.decode("utf-8", errors="replace")
         if not line.strip():
             return
-        level = ui.command_line(line, channel)
+        level = ui.command_line(line, channel, display=not native)
         tail.append(line)
         if level == "ERROR":
             errors.append(line)
-        if channel == "STDOUT":
+        if channel == "STDOUT" and not native:
             stdout.append(line)
 
     try:
@@ -121,19 +199,28 @@ def run(args, ui, label, *, discard_stdout=False, progress_file=None):
             while selector.get_map():
                 for key, _events in selector.select(timeout=0.2):
                     channel = key.data
-                    chunk = os.read(key.fd, 65536)
+                    try:
+                        chunk = os.read(key.fd, 65536)
+                    except OSError as error:
+                        if master is None or error.errno != errno.EIO:
+                            raise
+                        chunk = b""  # Linux PTY end-of-file.
                     if not chunk:
                         selector.unregister(key.fileobj)
                         if pending[channel]:
                             consume(pending[channel], channel)
                             pending[channel] = b""
                         continue
+                    if native:
+                        ui.relay(chunk, stderr=channel == "STDERR")
+                        chunk = chunk.replace(b"\r", b"\n")
                     pending[channel] += chunk
                     while b"\n" in pending[channel]:
                         line, pending[channel] = pending[channel].split(b"\n", 1)
                         consume(line, channel)
-                size = progress_file.stat().st_size if progress_file and progress_file.exists() else None
-                ui.progress(label, time.monotonic() - started, size=size)
+                if not native:
+                    size = progress_file.stat().st_size if progress_file and progress_file.exists() else None
+                    ui.progress(label, time.monotonic() - started, size=size)
         code = process.wait()
         if code:
             details = list(errors or tail)
@@ -141,7 +228,7 @@ def run(args, ui, label, *, discard_stdout=False, progress_file=None):
             reason = ": нет доступа к исходным данным" if "permission denied" in text else (
                 ": недостаточно свободного места" if "no space left" in text else "")
             raise BackupError(f"{label}{reason} (код команды {code})", details=details)
-        if errors and not ui.verbose:
+        if errors and not ui.verbose and not native:
             ui.warning(f"{label}: команда сообщила о проблеме при коде 0")
             for line in dict.fromkeys(errors):
                 ui.show(f"  {line}", "WARN")
@@ -356,7 +443,7 @@ def perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report)
         report["stop_attempted"] = True
         downtime_start = ui.downtime_start = time.monotonic()
         ui.service_state = "ОСТАНОВКА"
-        run(["bash", controller, "stop", main_dir, plugins_dir], ui, "Остановка системы")
+        run(["bash", controller, "stop", main_dir, plugins_dir], ui, "Остановка системы", native=True)
         ui.service_state = "ОСТАНОВЛЕНЫ"
         ui.ok("Сервисы остановлены")
         phase = "archive"
@@ -395,7 +482,7 @@ def perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report)
                 if code:
                     ui.show("Запускаю сервисы после ошибки…", "WARN")
                 try:
-                    run(["bash", controller, "start", main_dir, plugins_dir], ui, "Запуск системы")
+                    run(["bash", controller, "start", main_dir, plugins_dir], ui, "Запуск системы", native=True)
                     report["services_status"] = "running"
                     ui.service_state = "ЗАПУЩЕНЫ"
                     ui.ok("Система запущена")
@@ -479,7 +566,7 @@ def summary(ui, report, output=None):
         ui.show(f"Восстановление: {report['recovery_command']}", "ERROR")
 
 
-def finish(report, ui, started, code, output=None):
+def finish(report, ui, started, code, output=None, access=None):
     report.update(finished_at=now(), duration_seconds=round(time.monotonic() - started, 3), exit_code=code)
     report["warnings"] = list(dict.fromkeys(report["warnings"] + ui.warnings))
     if ui.failed:
@@ -510,6 +597,21 @@ def finish(report, ui, started, code, output=None):
             atomic_json(output / "result.json", report)
         except OSError:
             ui.error("Не удалось сохранить полный отчёт; проверьте диск и права каталога бэкапа")
+    if output and access:
+        with ignore_interrupts():
+            try:
+                access.grant(output)
+            except (OSError, BackupError) as error:
+                code = record_error(report, ui, error, "permissions") or code
+                report.update(status="failed", exit_code=code)
+                try:
+                    (output / "SUCCESS").unlink(missing_ok=True)
+                    (output / "FAILED").write_text(now() + "\n", encoding="utf-8")
+                    atomic_json(output / "result.json", report)
+                    for name in ("FAILED", "result.json"):
+                        access.give(output / name)
+                except (OSError, BackupError):
+                    ui.error("Не удалось сохранить доступный пользователю отчёт об ошибке прав")
     return code
 
 
@@ -546,6 +648,7 @@ def main():
               "paths": {"homeassistant": str(main_dir), "plugins": str(plugins_dir), "backups": str(backups_dir)},
               "recovery_command": shlex.join(["bash", str(controller), "start", str(main_dir), str(plugins_dir)])}
     output = None
+    access = None
     destination_ready = False
     old_handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     try:
@@ -555,6 +658,8 @@ def main():
                 command = shlex.join(["sudo", "bash", str(Path(__file__).with_suffix(".sh")), *sys.argv[1:]])
                 raise BackupError("Для чтения защищённых данных требуется запуск от root через sudo", action=command)
         os.umask(0o077)
+        access = BackupAccess.caller()
+        report["owner"] = {"uid": access.uid, "gid": access.gid}
         for command in ("bash", "docker", "tar"):
             if not shutil.which(command):
                 raise BackupError(f"Не найдена команда: {command}")
@@ -583,6 +688,7 @@ def main():
             ui.ok("Проверка пройдена. Остановка и архивирование не выполнялись")
             return finish(report, ui, started, 0)
         ui.show(f"\nКопия:       {timestamp}\nНазначение:  {backups_dir / timestamp}")
+        ui.show(f"Владелец:    UID {access.uid}, GID {access.gid}")
         ui.composition([(task.label, task.name) for task in tasks])
         ui.show("HACS: компоненты и их настройки входят в архив Home Assistant.")
         ui.show("\nБудут остановлены Home Assistant, Mosquitto и все контейнеры проекта плагинов.\n"
@@ -596,27 +702,23 @@ def main():
             ui.show("Бэкап отменён; состояние сервисов не изменено")
             return finish(report, ui, started, 2)
         with installation_lock(main_dir, create=True):
-            backups_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            output = backups_dir / timestamp
-            output.mkdir(mode=0o700)
+            output = access.create_output(backups_dir, timestamp)
             ui.attach(output / "backup.log")
             ui.record("Подтверждение пользователя получено: yes")
             code = perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report)
-            return finish(report, ui, started, code, output)
+            return finish(report, ui, started, code, output, access)
     except Exception as error:
         code = record_error(report, ui, error, "preflight" if not output else "backup")
         # Keep full diagnostics for failed preflight when the destination is usable.
         # --check, refusal and contention leave no persistent artifacts.
         if not args.check and destination_ready and not isinstance(error, LockedError) and output is None:
             try:
-                backups_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-                output = backups_dir / timestamp
-                output.mkdir(mode=0o700)
+                output = access.create_output(backups_dir, timestamp)
                 ui.attach(output / "backup.log")
             except OSError as save_error:
                 output = None
                 ui.error(f"Не удалось сохранить диагностику: {save_error}")
-        return finish(report, ui, started, code, output)
+        return finish(report, ui, started, code, output, access)
     finally:
         ui.close()
         for sig, handler in old_handlers.items():

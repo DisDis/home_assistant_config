@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import re
+import os
 import shutil
 import sys
 import time
@@ -123,15 +124,28 @@ class Reporter:
             suffix = "подробности в backup.log" if self.file else "подробности доступны с --verbose"
             self.show(f"  … ещё {len(details) - 3}; {suffix}", "ERROR")
 
-    def command_line(self, line, channel):
+    def command_line(self, line, channel, *, display=True):
         level = "ERROR" if ERROR.search(line) else "WARN" if WARNING.search(line) else "DEBUG"
         if level == "WARN":
             self.warnings.append(line)
-        if self.verbose or level == "WARN":
+        if display and (self.verbose or level == "WARN"):
             self.show(f"  {channel}: {line}", level)
         else:
             self.record(f"{channel}: {line}", level)
         return level
+
+    def relay(self, chunk, *, stderr=False):
+        """Relay Docker's own terminal output verbatim; log it separately."""
+        if not self.console:
+            return
+        stream = sys.stderr if stderr else sys.stdout
+        try:
+            stream.flush()
+            view = memoryview(chunk)
+            while view:
+                view = view[os.write(stream.fileno(), view):]
+        except OSError:
+            self.console = False
 
     def progress(self, label, elapsed, *, size=None, percent=None):
         now = time.monotonic()

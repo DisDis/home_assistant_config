@@ -199,12 +199,17 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertNotIn("\033[", (output / "backup.log").read_text())
         self.assertNotIn("\033[", result.stdout + result.stderr)
         self.assertNotIn("\r", result.stdout)
-        self.assertNotIn("Enabled services:", result.stdout)
+        before_confirmation = result.stdout.split("введите yes", 1)[0]
+        self.assertNotIn("Enabled services:", before_confirmation)
+        self.assertIn("Enabled services:", result.stdout)
         self.assertIn("Enabled services:", (output / "backup.log").read_text())
         report = json.loads((output / "result.json").read_text())
         self.assertEqual(report["status"], "success")
         self.assertEqual(report["backup_status"], "verified")
         self.assertEqual(report["services_status"], "running")
+        self.assertEqual(report["owner"], {"uid": os.getuid(), "gid": os.getgid()})
+        for path in (output.parent, output, *output.iterdir()):
+            self.assertEqual((path.stat().st_uid, path.stat().st_gid), (os.getuid(), os.getgid()))
         self.assertTrue(report["stop_attempted"])
         self.assertTrue(report["restart_attempted"])
         self.assertGreater(report["downtime_seconds"], 0)
@@ -407,6 +412,19 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertEqual(report["services_status"], "running")
         self.assertTrue(report["restart_attempted"])
         self.assertIn("Недостаточно свободного места", result.stderr)
+
+    def test_sudo_caller_owns_failed_copy_and_new_destination_parents(self):
+        destination = self.root / "new-parent/nested/backups"
+        result = self.invoke(args=(self.main, self.plugins, destination), FAIL_ARCHIVE="1",
+                             SUDO_UID=str(os.getuid()), SUDO_GID=str(os.getgid()))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_running()
+        output = next(destination.iterdir())
+        report = json.loads((output / "result.json").read_text())
+        self.assertEqual(report["owner"], {"uid": os.getuid(), "gid": os.getgid()})
+        for path in (self.root / "new-parent", destination.parent, destination, output, *output.iterdir()):
+            self.assertEqual((path.stat().st_uid, path.stat().st_gid), (os.getuid(), os.getgid()))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
 
 
 if __name__ == "__main__":
