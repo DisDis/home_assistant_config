@@ -15,6 +15,8 @@ id_ed25519
 *.p12
 *.pfx
 
+repos/
+
 # Home Assistant, MQTT, Zigbee, Matter, and editor runtime state
 /homeassistant/config/
 /homeassistant/mosquitto/
