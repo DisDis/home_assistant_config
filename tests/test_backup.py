@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -28,8 +29,24 @@ class BackupTests(unittest.TestCase):
         self.system = self.root / "system"
         for directory in (self.main, self.plugins, self.system):
             directory.mkdir()
-        for name in ("backup.sh", "backup.py", "ha.sh", "plugins.sh", "plugins.py"):
+        for name in ("backup.sh", "backup.py", "backup_ui.py", "ha.sh", "plugins.sh", "plugins.py"):
             shutil.copy(ROOT / "system" / name, self.system)
+        # Only the euid policy is simulated. File opens retain the real OS permissions.
+        self.runner = self.root / "run_backup.py"
+        self.runner.write_text('''import os, pathlib, runpy, shutil, sys
+from contextlib import ExitStack
+from unittest.mock import patch
+sys.dont_write_bytecode = True
+script = pathlib.Path(__file__).parent / "system/backup.py"
+sys.path.insert(0, str(script.parent))
+sys.argv = [str(script), *sys.argv[1:]]
+with ExitStack() as patches:
+    patches.enter_context(patch("os.geteuid", return_value=int(os.environ.get("TEST_EUID", "0"))))
+    if "TEST_FREE_BYTES" in os.environ:
+        usage = shutil.disk_usage(script.parent)
+        patches.enter_context(patch("shutil.disk_usage", return_value=usage._replace(free=int(os.environ["TEST_FREE_BYTES"]))))
+    runpy.run_path(str(script), run_name="__main__")
+''')
         shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.main)
         shutil.copy(ROOT / "plugins/docker-compose.yml", self.plugins)
         (self.plugins / ".env").write_text("COMPOSE_PROFILES=matter-server\n")
@@ -107,8 +124,11 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
         self.docker_log.write_text("")
 
-    def invoke(self, answer="yes\n", **env):
-        return subprocess.run(["bash", str(self.system / "backup.sh")], cwd="/tmp",
+    def command(self, *args):
+        return [sys.executable, str(self.runner), *map(str, args)]
+
+    def invoke(self, answer="yes\n", *, args=(), **env):
+        return subprocess.run(self.command(*args), cwd="/tmp",
                               input=answer, text=True, capture_output=True,
                               env=dict(self.env, **env), timeout=30)
 
@@ -128,31 +148,53 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_running()
         output = self.output_dir()
-        expected = {"homeassistant.tar.gz", "plugins-config.tar.gz"}
-        expected.update(f"plugin-{name}.tar.gz" for name in (
+        timestamp = output.name
+        self.assertRegex(timestamp, r"^\d{8}-\d{6}-\d{6}[+-]\d{4}$")
+        expected = {f"homeassistant-{timestamp}.tar.gz", f"plugins-config-{timestamp}.tar.gz"}
+        expected.update(f"plugin-{name}-{timestamp}.tar.gz" for name in (
             "matter-server", "hass-configurator", "zigbee2mqtt", "future-plugin", "yandex-smart-home"))
         self.assertEqual({p.name for p in output.glob("*.tar.gz")}, expected)
+        for name in expected:
+            self.assertIn(name, result.stdout)
         self.assertTrue((output / "SUCCESS").is_file())
         self.assertFalse((output / "FAILED").exists())
         self.assertEqual(output.stat().st_mode & 0o777, 0o700)
         for path in output.iterdir():
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-        with tarfile.open(output / "homeassistant.tar.gz") as archive:
+        with tarfile.open(output / f"homeassistant-{timestamp}.tar.gz") as archive:
             self.assertEqual(archive.extractfile("homeassistant/config/.storage/test").read(), b"HA integration state")
             self.assertEqual(archive.extractfile("homeassistant/mosquitto/data/mosquitto.db").read(), b"MQTT state")
             self.assertIn("homeassistant/.env", archive.getnames())
             self.assertNotIn("homeassistant/backups/old.tar.gz", archive.getnames())
             self.assertNotIn("homeassistant/.ha-backup.lock", archive.getnames())
-        with tarfile.open(output / "plugin-future-plugin.tar.gz") as archive:
+        with tarfile.open(output / f"plugin-future-plugin-{timestamp}.tar.gz") as archive:
             self.assertEqual(archive.extractfile("plugins/future-plugin/data/state").read(), b"future-plugin saved state")
-        with tarfile.open(output / "plugins-config.tar.gz") as archive:
+        with tarfile.open(output / f"plugins-config-{timestamp}.tar.gz") as archive:
             self.assertEqual(set(archive.getnames()), {"plugins/.env", "plugins/docker-compose.yml"})
-        for line in (output / "SHA256SUMS").read_text().splitlines():
+        checksum_lines = (output / "SHA256SUMS").read_text().splitlines()
+        self.assertEqual({line.split("  ", 1)[1] for line in checksum_lines}, expected)
+        for line in checksum_lines:
             digest, name = line.split("  ", 1)
             self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(), digest)
         self.assertNotIn("\033[", (output / "backup.log").read_text())
+        self.assertNotIn("\033[", result.stdout + result.stderr)
+        self.assertNotIn("\r", result.stdout)
+        self.assertNotIn("Enabled services:", result.stdout)
+        self.assertIn("Enabled services:", (output / "backup.log").read_text())
+        report = json.loads((output / "result.json").read_text())
+        self.assertEqual(report["status"], "success")
+        self.assertEqual(report["backup_status"], "verified")
+        self.assertEqual(report["services_status"], "running")
+        self.assertTrue(report["stop_attempted"])
+        self.assertTrue(report["restart_attempted"])
+        self.assertGreater(report["downtime_seconds"], 0)
+        self.assertFalse(report["downtime_ongoing"])
+        self.assertEqual({item["name"] for item in report["archives"]}, expected)
+        for item in report["archives"]:
+            self.assertEqual(item["status"], "verified")
+            self.assertEqual(item["sha256"], hashlib.sha256((output / item["name"]).read_bytes()).hexdigest())
         mutations = self.mutations()
-        self.assertEqual(mutations[0][0], "stop")
+        self.assertEqual(mutations[0][:3], ["stop", "-t", "60"])
         self.assertIn("stop", mutations[1])
         self.assertIn(str(self.main), mutations[1])
         self.assertIn(str(self.main), mutations[2])
@@ -179,7 +221,12 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertFalse((output / "SUCCESS").exists())
         self.assertEqual(list(output.glob("*.part")), [])
         self.assertIn("no space left", (output / "backup.log").read_text())
-        self.assertIn("ERROR", result.stderr)
+        self.assertIn("ОШИБКА", result.stderr)
+        report = json.loads((output / "result.json").read_text())
+        self.assertEqual(report["backup_status"], "failed")
+        self.assertEqual(report["services_status"], "running")
+        self.assertEqual(report["errors"][0]["phase"], "archive")
+        self.assertTrue(any("no space left" in detail for detail in report["errors"][0]["details"]))
 
     def test_partial_stop_failure_still_attempts_restart_without_archiving(self):
         result = self.invoke(FAIL_MAIN_STOP="1")
@@ -202,6 +249,10 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertIn("ha.sh' start", result.stderr)
         self.assertFalse((self.output_dir() / "SUCCESS").exists())
         self.assertTrue((self.output_dir() / "FAILED").is_file())
+        report = json.loads((self.output_dir() / "result.json").read_text())
+        self.assertEqual(report["backup_status"], "created")
+        self.assertEqual(report["services_status"], "start_failed")
+        self.assertTrue(report["downtime_ongoing"])
 
     def test_verification_failure_does_not_claim_success_services_are_running(self):
         result = self.invoke(FAIL_VERIFY="1")
@@ -209,9 +260,12 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assert_running()
         self.assertFalse((self.output_dir() / "SUCCESS").exists())
         self.assertTrue((self.output_dir() / "FAILED").is_file())
+        report = json.loads((self.output_dir() / "result.json").read_text())
+        self.assertEqual(report["backup_status"], "failed")
+        self.assertEqual(report["services_status"], "running")
 
     def test_signal_recovery_and_lock_across_different_destinations(self):
-        process = subprocess.Popen(["bash", str(self.system / "backup.sh")],
+        process = subprocess.Popen(self.command(),
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, env=dict(self.env, WAIT_ARCHIVE="1"))
         self.addCleanup(lambda: process.poll() is None and process.kill())
@@ -222,9 +276,8 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             time.sleep(0.05)
         self.assertTrue(self.marker.exists(), "first backup never reached archive step")
         mutations = self.mutations()
-        second = subprocess.run([
-            "bash", str(self.system / "backup.sh"), str(self.main), str(self.plugins),
-            str(self.root / "other-backups")], input="yes\n", text=True, capture_output=True,
+        second = subprocess.run(self.command(self.main, self.plugins, self.root / "other-backups"),
+            input="yes\n", text=True, capture_output=True,
             env=self.env, timeout=10)
         self.assertNotEqual(second.returncode, 0)
         self.assertIn("уже выполняется", second.stderr)
@@ -237,6 +290,88 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertTrue((self.output_dir() / "FAILED").is_file())
         self.assertFalse((self.output_dir() / "SUCCESS").exists())
         self.assertEqual(list(self.output_dir().glob("*.part")), [])
+        report = json.loads((self.output_dir() / "result.json").read_text())
+        self.assertEqual(report["exit_code"], 143)
+        self.assertEqual(report["services_status"], "running")
+
+    def test_check_never_prompts_stops_archives_or_leaves_files(self):
+        before = set(self.root.rglob("*"))
+        result = self.invoke("", args=("--check",))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("введите yes", result.stdout)
+        self.assertIn("Проверка: ПРОЙДЕНА", result.stdout)
+        self.assertIn("Сервисы:  НЕ ИЗМЕНЯЛИСЬ", result.stdout)
+        self.assertEqual(self.mutations(), [])
+        self.assertEqual(set(self.root.rglob("*")), before)
+        self.assertFalse(self.marker.exists())
+        self.assert_running()
+
+    def test_non_root_fails_before_prompt_and_docker_access(self):
+        result = self.invoke(TEST_EUID="1000")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("sudo bash", result.stderr)
+        self.assertNotIn("введите yes", result.stdout)
+        self.assertEqual(self.docker_log.read_text(), "")
+        self.assertFalse((self.root / "backups").exists())
+        self.assert_running()
+
+    @unittest.skipIf(os.geteuid() == 0, "Real Unix access-denied checks require an unprivileged test process")
+    def test_unreadable_file_and_directory_fail_before_stopping(self):
+        file = self.main / "config/.storage/test"
+        directory = self.plugins / "matter-server/data"
+        file.chmod(0)
+        directory.chmod(0)
+        self.addCleanup(file.chmod, 0o600)
+        self.addCleanup(directory.chmod, 0o700)
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("введите yes", result.stdout)
+        self.assertIn("Не удалось прочитать 2", result.stderr)
+        self.assertEqual(self.mutations(), [])
+        self.assertFalse(self.marker.exists())
+        self.assert_running()
+        report = json.loads((self.output_dir() / "result.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["backup_status"], "not_started")
+        self.assertEqual(report["services_status"], "unchanged")
+        self.assertFalse(report["stop_attempted"])
+        details = report["errors"][0]["details"]
+        self.assertTrue(any(str(file) in detail for detail in details))
+        self.assertTrue(any(str(directory) in detail for detail in details))
+
+    @unittest.skipIf(os.geteuid() == 0, "Real Unix access-denied checks require an unprivileged test process")
+    def test_unwritable_destination_fails_before_stop_and_without_archives(self):
+        destination = self.root / "backups"
+        destination.mkdir(mode=0o700)
+        destination.chmod(0o500)
+        self.addCleanup(destination.chmod, 0o700)
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("недоступен для записи", result.stderr)
+        self.assertEqual(self.mutations(), [])
+        self.assertEqual(list(destination.iterdir()), [])
+        self.assert_running()
+
+    def test_verbose_plain_check_shows_commands_without_terminal_controls(self):
+        result = self.invoke("", args=("--check", "--verbose", "--plain"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("STDOUT: Enabled services:", result.stdout)
+        self.assertIn("[OK]", result.stdout)
+        self.assertNotIn("\033[", result.stdout + result.stderr)
+        self.assertNotIn("\r", result.stdout)
+        self.assertFalse((self.root / "backups").exists())
+
+    def test_no_space_fails_before_stop_and_saves_failed_report(self):
+        result = self.invoke(TEST_FREE_BYTES="0")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("свободного места", result.stderr)
+        self.assertEqual(self.mutations(), [])
+        self.assertFalse(self.marker.exists())
+        report = json.loads((self.output_dir() / "result.json").read_text())
+        self.assertFalse(report["stop_attempted"])
+        self.assertEqual(report["services_status"], "unchanged")
+        self.assertEqual(report["status"], "failed")
+        self.assert_running()
 
 
 if __name__ == "__main__":

@@ -443,17 +443,17 @@ sudo bash /home/hauser/home_assistant_config/system/backup.sh
 
 После подтверждения проверяются Docker и Compose. Затем скрипт вызывает `ha.sh stop`: сначала останавливаются плагины, затем HA и MQTT. При остановленной системе он создаёт отдельные архивы. После копирования `ha.sh start` запускает основной стек и выбранные в текущем `.env` плагины без скачивания образов. Как и обычный `ha.sh start`, этот запуск применяет текущий выбор профилей, а не восстанавливает произвольное состояние контейнеров до бэкапа.
 
-Каждый запуск создаёт каталог `backups/ДАТА-ВРЕМЯ-МИКРОСЕКУНДЫ+ЧАСОВОЙПОЯС/` в корне проекта:
+Каждый запуск создаёт каталог `backups/ДАТА-ВРЕМЯ-МИКРОСЕКУНДЫ+ЧАСОВОЙПОЯС/` в корне проекта. Одна и та же метка времени добавляется в имя **каждого архива**: например, `homeassistant-20261109-184400-123456+0300.tar.gz` и `plugin-matter-server-20261109-184400-123456+0300.tar.gz`. В таблице `МЕТКА` обозначает эту общую метку запуска:
 
 | Файл | Содержимое |
 | --- | --- |
-| `homeassistant.tar.gz` | Весь `homeassistant/`: Compose, `.env`, `config/` с базой, `.storage`, HACS и секретами; конфигурация и данные Mosquitto |
-| `plugin-zigbee2mqtt.tar.gz` | Весь `plugins/zigbee2mqtt/`, включая `data/` |
-| `plugin-hass-configurator.tar.gz` | Весь `plugins/hass-configurator/`, включая настройки редактора |
-| `plugin-matter-server.tar.gz` | Весь `plugins/matter-server/`, включая контроллер, сертификаты и OTA |
-| `plugin-yandex-smart-home.tar.gz` | Инструкции из `plugins/yandex-smart-home/`; сам компонент HACS и настройки интеграции входят в `homeassistant.tar.gz` |
-| `plugin-ИМЯ.tar.gz` | Любой дополнительный каталог плагина; список каталогов определяется автоматически, включая отключённые плагины |
-| `plugins-config.tar.gz` | Общие файлы `plugins/`: Compose, `.env`, шаблоны и README |
+| `homeassistant-МЕТКА.tar.gz` | Весь `homeassistant/`: Compose, `.env`, `config/` с базой, `.storage`, HACS и секретами; конфигурация и данные Mosquitto |
+| `plugin-zigbee2mqtt-МЕТКА.tar.gz` | Весь `plugins/zigbee2mqtt/`, включая `data/` |
+| `plugin-hass-configurator-МЕТКА.tar.gz` | Весь `plugins/hass-configurator/`, включая настройки редактора |
+| `plugin-matter-server-МЕТКА.tar.gz` | Весь `plugins/matter-server/`, включая контроллер, сертификаты и OTA |
+| `plugin-yandex-smart-home-МЕТКА.tar.gz` | Инструкции из `plugins/yandex-smart-home/`; сам компонент HACS и настройки интеграции входят в `homeassistant-МЕТКА.tar.gz` |
+| `plugin-ИМЯ-МЕТКА.tar.gz` | Любой дополнительный каталог плагина; список каталогов определяется автоматически, включая отключённые плагины |
+| `plugins-config-МЕТКА.tar.gz` | Общие файлы `plugins/`: Compose, `.env`, шаблоны и README |
 | `backup.log` | Журнал этапов, вывода команд, ошибок и результата запуска системы |
 | `SHA256SUMS`, `SUCCESS` | Контрольные суммы и отметка полного успеха; создаются после запуска системы и проверки всех архивов |
 
@@ -470,7 +470,7 @@ sudo bash /home/hauser/home_assistant_config/system/backup.sh /home/hauser/home_
 bash /home/hauser/home_assistant_config/system/backup.sh --help
 ```
 
-Архивы содержат относительные пути `homeassistant/...` и `plugins/...`, владельцев, права, ACL и расширенные атрибуты. Для восстановления остановите систему, распакуйте нужные архивы в корень проекта от root с сохранением этих метаданных, проверьте локальные `.env` и запустите `ha.sh start`. При восстановлении плагина учитывайте также `plugins-config.tar.gz`; интеграциям HACS необходим архив HA с `.storage`, одного каталога инструкций недостаточно.
+Архивы содержат относительные пути `homeassistant/...` и `plugins/...`, владельцев, права, ACL и расширенные атрибуты. Для восстановления остановите систему, распакуйте нужные архивы в корень проекта от root с сохранением этих метаданных, проверьте локальные `.env` и запустите `ha.sh start`. При восстановлении плагина учитывайте также `plugins-config-МЕТКА.tar.gz` из той же копии; интеграциям HACS необходим архив HA с `.storage`, одного каталога инструкций недостаточно.
 
 ### Обновление существующей установки
 

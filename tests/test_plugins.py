@@ -268,7 +268,7 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(c["State"]["Running"], project == "tools-portainer")
         commands = self.commands()
         stops = [c for c in commands if c[0] == "stop" or c[0] == "compose" and "stop" in c]
-        self.assertEqual(stops[0], ["stop", "--time", "60", "ha-plugins_matter-server"])
+        self.assertEqual(stops[0], ["stop", "-t", "60", "ha-plugins_matter-server"])
         self.assertEqual(stops[1][0], "compose")  # Plugins stop before the main stack.
         self.assertIn(str(self.main), stops[1])
         self.assertFalse(any("pull" in c or "up" in c or c[0] == "rm" for c in commands))

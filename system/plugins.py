@@ -108,7 +108,8 @@ class Plugins:
         # Stop the entire managed project, including no-longer-selected services.
         found = self.containers()
         if found:
-            run(["docker", "stop", "--time", "60", *[c["Id"] for c in found]], capture=False)
+            # -t works with both older --time and newer --timeout Docker CLIs.
+            run(["docker", "stop", "-t", "60", *[c["Id"] for c in found]], capture=False)
         print("Plugin containers: stopped; data and containers preserved")
 
     def apply(self, *, pull):
@@ -118,7 +119,7 @@ class Plugins:
             self.compose("pull", *self.services, capture=False)
         disabled = [c["Id"] for c in found if self.service_name(c) not in self.services]
         if disabled:
-            run(["docker", "stop", "--time", "30", *disabled], capture=False)
+            run(["docker", "stop", "-t", "30", *disabled], capture=False)
             run(["docker", "rm", *disabled], capture=False)  # No -v: preserve data.
         if self.services:
             self.compose("up", "-d", "--pull", "never", "--wait", "--wait-timeout", "60",

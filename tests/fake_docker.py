@@ -97,6 +97,8 @@ elif args[0] == "inspect":
         print(json.dumps([container(arg) for arg in args[1:]]))
 elif args[0] in ("stop", "rm"):
     assert "-v" not in args and "--volumes" not in args
+    if args[0] == "stop":
+        assert args[1] == "-t", "Use the Docker timeout flag supported by old and new CLIs"
     targets = args[3:] if args[0] == "stop" else args[1:]
     for target in targets:
         c = container(target)
