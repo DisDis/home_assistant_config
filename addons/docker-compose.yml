@@ -1,8 +1,8 @@
-name: ha-plugins
+name: ha-addons
 
 x-enabled-profiles: ${COMPOSE_PROFILES:-}
 
-x-plugin-logging: &plugin-logging
+x-addon-logging: &addon-logging
   driver: json-file
   options:
     max-size: "10m"
@@ -21,10 +21,10 @@ services:
     devices:
       - ${ZIGBEE_ADAPTER_PATH:-/dev/ttyUSB0}:/dev/ttyUSB0
     ports:
-      - "${PLUGINS_BIND_IP:-127.0.0.1}:${ZIGBEE2MQTT_PORT:-8080}:8080"
+      - "${ADDONS_BIND_IP:-127.0.0.1}:${ZIGBEE2MQTT_PORT:-8080}:8080"
     networks:
       - ha-backend
-    logging: *plugin-logging
+    logging: *addon-logging
 
   hass-configurator:
     profiles: [hass-configurator]
@@ -34,7 +34,7 @@ services:
     # Configurator 0.6.0 handles SIGINT; deliver it directly to the application.
     stop_signal: SIGINT
     ports:
-      - "${PLUGINS_BIND_IP:-127.0.0.1}:${HASS_CONFIGURATOR_PORT:-3218}:3218"
+      - "${ADDONS_BIND_IP:-127.0.0.1}:${HASS_CONFIGURATOR_PORT:-3218}:3218"
     environment:
       HC_BASEPATH: /hass-config
       HC_ENFORCE_BASEPATH: "true"
@@ -44,8 +44,8 @@ services:
     entrypoint: [/bin/sh, -ec]
     command:
       - |
-        : "$${HC_USERNAME:?Set HC_USERNAME in plugins/.env}"
-        : "$${HC_PASSWORD:?Set HC_PASSWORD in plugins/.env}"
+        : "$${HC_USERNAME:?Set HC_USERNAME in addons/.env}"
+        : "$${HC_PASSWORD:?Set HC_PASSWORD in addons/.env}"
         if [ -f /config/settings.conf ]; then
           exec hass-configurator /config/settings.conf
         fi
@@ -57,7 +57,7 @@ services:
         target: /hass-config
         bind:
           create_host_path: false
-    logging: *plugin-logging
+    logging: *addon-logging
 
   matter-server:
     profiles: [matter-server]
@@ -83,7 +83,7 @@ services:
       - ./matter-server/data:/data
       - /run/dbus:/run/dbus:ro
       - /dev/bus/usb:/dev/bus/usb
-    logging: *plugin-logging
+    logging: *addon-logging
     # Мапим домен DCL на петлевой интерфейс, чтобы запросы падали мгновенно без таймаута:
     extra_hosts:
       - "on.dcl.csa-iot.org:127.0.0.1"

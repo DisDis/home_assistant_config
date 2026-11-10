@@ -250,8 +250,8 @@ def run(args, ui, label, *, discard_stdout=False, progress_file=None, native=Fal
             ui.clear()
 
 
-def plan(main_dir, plugins_dir, timestamp):
-    for directory in (main_dir, plugins_dir):
+def plan(main_dir, addons_dir, timestamp):
+    for directory in (main_dir, addons_dir):
         if not (directory / "docker-compose.yml").is_file():
             raise BackupError(f"Не найден Compose: {directory / 'docker-compose.yml'}")
     for directory in (main_dir / "config", main_dir / "mosquitto"):
@@ -260,20 +260,20 @@ def plan(main_dir, plugins_dir, timestamp):
     tasks = [ArchiveTask(f"homeassistant-{timestamp}.tar.gz", "Home Assistant + MQTT",
                          main_dir.parent, [main_dir.name])]
     common = []
-    for entry in sorted(plugins_dir.iterdir()):
+    for entry in sorted(addons_dir.iterdir()):
         if entry.name in EXCLUDED | {"__pycache__", ".git"}:
             continue
         if entry.is_symlink():
-            raise BackupError(f"Ссылка вместо каталога/файла плагина: {entry}; укажите реальные данные")
-        path = str(Path(plugins_dir.name) / entry.name)
+            raise BackupError(f"Ссылка вместо каталога/файла дополнения: {entry}; укажите реальные данные")
+        path = str(Path(addons_dir.name) / entry.name)
         if entry.is_dir() and not entry.name.startswith("."):
-            tasks.append(ArchiveTask(f"plugin-{entry.name}-{timestamp}.tar.gz", entry.name,
-                                     plugins_dir.parent, [path]))
+            tasks.append(ArchiveTask(f"addon-{entry.name}-{timestamp}.tar.gz", entry.name,
+                                     addons_dir.parent, [path]))
         else:
             common.append(path)
     if common:
-        tasks.append(ArchiveTask(f"plugins-config-{timestamp}.tar.gz", "Общие настройки плагинов",
-                                 plugins_dir.parent, common))
+        tasks.append(ArchiveTask(f"addons-config-{timestamp}.tar.gz", "Общие настройки дополнений",
+                                 addons_dir.parent, common))
     return tasks
 
 
@@ -358,15 +358,15 @@ def check_sources(tasks, ui):
     return {"files": count, "source_bytes": size, "symlinks": links}
 
 
-def preflight(main_dir, plugins_dir, tasks, controller, ui, report):
+def preflight(main_dir, addons_dir, tasks, controller, ui, report):
     ui.stage(1, "Проверки перед остановкой")
     compose = ["docker", "compose", "--project-directory", main_dir,
                "-f", main_dir / "docker-compose.yml", "--env-file",
                main_dir / ".env" if (main_dir / ".env").is_file() else os.devnull]
     with checked(report, "docker_compose"):
         run(compose + ["config", "--quiet"], ui, "Проверка основного Compose")
-        selection = run(["bash", controller.parent / "plugins.sh", "validate", plugins_dir],
-                        ui, "Проверка Compose плагинов")
+        selection = run(["bash", controller.parent / "addons.sh", "validate", addons_dir],
+                        ui, "Проверка Compose дополнений")
         run(["docker", "info", "--format", "{{.ServerVersion}}"], ui, "Проверка Docker")
     ui.ok("Docker и конфигурации доступны")
     with checked(report, "source_access") as check:
@@ -379,7 +379,7 @@ def preflight(main_dir, plugins_dir, tasks, controller, ui, report):
         ui.warning(message)
     for line in selection.splitlines():
         if line.startswith("Enabled services: "):
-            report["selected_plugins"] = line.removeprefix("Enabled services: ")
+            report["selected_addons"] = line.removeprefix("Enabled services: ")
     return sources
 
 
@@ -428,13 +428,13 @@ def create_archive(task, destination, ui):
             ui.warning(f"Не удалось удалить незавершённый архив {partial}: {error}")
 
 
-def perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report):
+def perform_backup(main_dir, addons_dir, tasks, controller, output, ui, report):
     code = 0
     restart_needed = False
     downtime_start = None
     phase = "stop"
     try:
-        ui.stage(2, "Остановка: плагины → Home Assistant и Mosquitto")
+        ui.stage(2, "Остановка: дополнения → Home Assistant и Mosquitto")
         # Fail before stopping if the initial report or log cannot be saved.
         atomic_json(output / "result.json", report)
         if ui.failed:
@@ -443,7 +443,7 @@ def perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report)
         report["stop_attempted"] = True
         downtime_start = ui.downtime_start = time.monotonic()
         ui.service_state = "ОСТАНОВКА"
-        run(["bash", controller, "stop", main_dir, plugins_dir], ui, "Остановка системы", native=True)
+        run(["bash", controller, "stop", main_dir, addons_dir], ui, "Остановка системы", native=True)
         ui.service_state = "ОСТАНОВЛЕНЫ"
         ui.ok("Сервисы остановлены")
         phase = "archive"
@@ -478,11 +478,11 @@ def perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report)
             with ignore_interrupts():
                 report["restart_attempted"] = True
                 ui.service_state = "ЗАПУСК"
-                ui.stage(4, "Запуск: Home Assistant и Mosquitto → выбранные плагины")
+                ui.stage(4, "Запуск: Home Assistant и Mosquitto → выбранные дополнения")
                 if code:
                     ui.show("Запускаю сервисы после ошибки…", "WARN")
                 try:
-                    run(["bash", controller, "start", main_dir, plugins_dir], ui, "Запуск системы", native=True)
+                    run(["bash", controller, "start", main_dir, addons_dir], ui, "Запуск системы", native=True)
                     report["services_status"] = "running"
                     ui.service_state = "ЗАПУЩЕНЫ"
                     ui.ok("Система запущена")
@@ -619,11 +619,11 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="показать полный вывод команд и диагностику")
     parser.add_argument("--plain", action="store_true", help="без цвета, анимации и специальных символов")
     parser.add_argument("homeassistant_dir", nargs="?", type=Path, default=default_main)
-    parser.add_argument("plugins_dir", nargs="?", type=Path)
+    parser.add_argument("addons_dir", nargs="?", type=Path)
     parser.add_argument("backups_dir", nargs="?", type=Path)
     args = parser.parse_args()
     main_dir = args.homeassistant_dir.resolve()
-    plugins_dir = (args.plugins_dir or main_dir.parent / "plugins").resolve()
+    addons_dir = (args.addons_dir or main_dir.parent / "addons").resolve()
     backups_dir = (args.backups_dir or main_dir.parent / "backups").resolve()
     controller = Path(__file__).with_name("ha.sh")
     timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f%z")
@@ -636,13 +636,13 @@ def main():
         unicode_ok = False
     ui = Reporter(verbose=args.verbose, plain=args.plain or not unicode_ok or os.environ.get("TERM") == "dumb",
                   no_color="NO_COLOR" in os.environ)
-    report = {"schema_version": 1, "mode": "check" if args.check else "backup", "run_id": timestamp,
+    report = {"schema_version": 2, "mode": "check" if args.check else "backup", "run_id": timestamp,
               "started_at": now(), "finished_at": None, "status": "in_progress", "exit_code": None,
               "backup_status": "not_started", "services_status": "unchanged", "stop_attempted": False,
               "restart_attempted": False, "downtime_seconds": 0, "downtime_ongoing": False,
               "duration_seconds": 0, "checks": [], "warnings": [], "errors": [], "archives": [],
-              "paths": {"homeassistant": str(main_dir), "plugins": str(plugins_dir), "backups": str(backups_dir)},
-              "recovery_command": shlex.join(["bash", str(controller), "start", str(main_dir), str(plugins_dir)])}
+              "paths": {"homeassistant": str(main_dir), "addons": str(addons_dir), "backups": str(backups_dir)},
+              "recovery_command": shlex.join(["bash", str(controller), "start", str(main_dir), str(addons_dir)])}
     output = None
     access = None
     destination_ready = False
@@ -659,10 +659,10 @@ def main():
         for command in ("bash", "docker", "tar"):
             if not shutil.which(command):
                 raise BackupError(f"Не найдена команда: {command}")
-        for source in (main_dir, plugins_dir):
+        for source in (main_dir, addons_dir):
             if backups_dir == source or source in backups_dir.parents:
-                raise BackupError("Каталог backups должен находиться вне каталогов HA и плагинов")
-        tasks = plan(main_dir, plugins_dir, timestamp)
+                raise BackupError("Каталог backups должен находиться вне каталогов HA и дополнений")
+        tasks = plan(main_dir, addons_dir, timestamp)
         report["archives"] = [{"name": task.name, "component": task.label, "status": "pending",
                                "size_bytes": 0, "duration_seconds": 0, "sha256": None} for task in tasks]
         with installation_lock(main_dir, create=False):
@@ -674,7 +674,7 @@ def main():
             with checked(report, "free_space"):
                 if free < 1024 * 1024:
                     raise BackupError("В каталоге назначения осталось менее 1 МиБ свободного места")
-            sources = preflight(main_dir, plugins_dir, tasks, controller, ui, report)
+            sources = preflight(main_dir, addons_dir, tasks, controller, ui, report)
             ui.ok(f"Запись доступна · свободно {human_size(free)}")
             if free < sources["source_bytes"] + 64 * 1024 * 1024:
                 message = "Места меньше объёма исходных данных с запасом 64 МиБ; размер после сжатия заранее неизвестен"
@@ -687,9 +687,9 @@ def main():
         ui.show(f"Владелец:    UID {access.uid}, GID {access.gid}")
         ui.composition([(task.label, task.name) for task in tasks])
         ui.show("HACS: компоненты и их настройки входят в архив Home Assistant.")
-        ui.show("\nБудут остановлены Home Assistant, Mosquitto и все контейнеры проекта плагинов.\n"
-                "После копирования: запуск HA и MQTT, затем плагинов из текущего .env.\n"
-                f"Выбранные плагины: {report.get('selected_plugins', 'согласно .env')}", "WARN")
+        ui.show("\nБудут остановлены Home Assistant, Mosquitto и все контейнеры проекта дополнений.\n"
+                "После копирования: запуск HA и MQTT, затем дополнений из текущего .env.\n"
+                f"Выбранные дополнения: {report.get('selected_addons', 'согласно .env')}", "WARN")
         try:
             confirmed = input("Для согласия на остановку и бэкап введите yes: ").strip() == "yes"
         except EOFError:
@@ -701,7 +701,7 @@ def main():
             output = access.create_output(backups_dir, timestamp)
             ui.attach(output / "backup.log")
             ui.record("Подтверждение пользователя получено: yes")
-            code = perform_backup(main_dir, plugins_dir, tasks, controller, output, ui, report)
+            code = perform_backup(main_dir, addons_dir, tasks, controller, output, ui, report)
             return finish(report, ui, started, code, output, access)
     except Exception as error:
         code = record_error(report, ui, error, "preflight" if not output else "backup")

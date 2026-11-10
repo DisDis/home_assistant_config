@@ -26,11 +26,11 @@ class BackupTests(unittest.TestCase):
         self.root = Path(temp.name) / "installation with spaces"
         self.root.mkdir()
         self.main = self.root / "homeassistant"
-        self.plugins = self.root / "plugins"
+        self.addons = self.root / "addons"
         self.system = self.root / "system"
-        for directory in (self.main, self.plugins, self.system):
+        for directory in (self.main, self.addons, self.system):
             directory.mkdir()
-        for name in ("backup.sh", "backup.py", "backup_ui.py", "ha.sh", "plugins.sh", "plugins.py"):
+        for name in ("backup.sh", "backup.py", "backup_ui.py", "ha.sh", "addons.sh", "addons.py"):
             shutil.copy(ROOT / "system" / name, self.system)
         # Only the euid policy is simulated. File opens retain the real OS permissions.
         self.runner = self.root / "run_backup.py"
@@ -67,8 +67,8 @@ with ExitStack() as patches:
         runpy.run_path(str(script), run_name="__main__")
 ''')
         shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.main)
-        shutil.copy(ROOT / "plugins/docker-compose.yml", self.plugins)
-        (self.plugins / ".env").write_text("COMPOSE_PROFILES=matter-server\n")
+        shutil.copy(ROOT / "addons/docker-compose.yml", self.addons)
+        (self.addons / ".env").write_text("COMPOSE_PROFILES=matter-server\n")
         (self.main / ".env").write_text("HA_BACKEND_NETWORK=test-backend\n")
         for relative in ("config/.storage", "mosquitto/data", "mosquitto/config", "mosquitto/log"):
             (self.main / relative).mkdir(parents=True, exist_ok=True)
@@ -77,12 +77,19 @@ with ExitStack() as patches:
         (self.main / "mosquitto/data/mosquitto.db").write_text("MQTT state")
         (self.main / "backups").mkdir()
         (self.main / "backups/old.tar.gz").write_text("must not be included")
-        for name in ("matter-server", "hass-configurator", "zigbee2mqtt", "future-plugin"):
-            data = self.plugins / name / "data"
+        for name in ("matter-server", "hass-configurator", "zigbee2mqtt", "future-addon"):
+            data = self.addons / name / "data"
             data.mkdir(parents=True)
             (data / "state").write_text(name + " saved state")
-        (self.plugins / "yandex-smart-home").mkdir()
-        (self.plugins / "yandex-smart-home/README.md").write_text("HACS instructions")
+        self.integrations = self.root / "integrations"
+        component = self.integrations / "yandex_smart_home/custom_components/yandex_smart_home"
+        component.mkdir(parents=True)
+        (component / "manifest.json").write_text('{"domain": "yandex_smart_home"}')
+        (self.main / "config/custom_components").mkdir()
+        (self.main / "config/custom_components/yandex_smart_home").symlink_to(
+            "/integrations/yandex_smart_home/custom_components/yandex_smart_home")
+        (self.main / "config/integration-versions").mkdir()
+        (self.main / "config/integration-versions/yandex_smart_home.commit").write_text("1" * 40 + "\n")
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.state = self.root / "state.json"
@@ -130,7 +137,7 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
 ''')
         for executable in self.bin.iterdir():
             executable.chmod(0o755)
-        prefixes = ("COMPOSE_", "HC_", "HA_", "PLUGINS_", "ZIGBEE", "HASS_CONFIGURATOR", "MATTER_")
+        prefixes = ("COMPOSE_", "HC_", "HA_", "ADDONS_", "ZIGBEE", "HASS_CONFIGURATOR", "MATTER_")
         self.env = {key: value for key, value in os.environ.items() if not key.startswith(prefixes)}
         self.env.update(
             PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
@@ -171,16 +178,16 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         output = self.output_dir()
         timestamp = output.name
         self.assertRegex(timestamp, r"^\d{8}-\d{6}-\d{6}[+-]\d{4}$")
-        expected = {f"homeassistant-{timestamp}.tar.gz", f"plugins-config-{timestamp}.tar.gz"}
-        expected.update(f"plugin-{name}-{timestamp}.tar.gz" for name in (
-            "matter-server", "hass-configurator", "zigbee2mqtt", "future-plugin", "yandex-smart-home"))
+        expected = {f"homeassistant-{timestamp}.tar.gz", f"addons-config-{timestamp}.tar.gz"}
+        expected.update(f"addon-{name}-{timestamp}.tar.gz" for name in (
+            "matter-server", "hass-configurator", "zigbee2mqtt", "future-addon"))
         self.assertEqual({p.name for p in output.glob("*.tar.gz")}, expected)
         for name in expected:
             self.assertNotIn(name, result.stdout)
             self.assertIn(name, (output / "backup.log").read_text())
         self.assertIn("1. Home Assistant + MQTT", result.stdout)
-        plugin_names = {path.name for path in self.plugins.iterdir() if path.is_dir()}
-        for name in plugin_names:
+        addon_names = {path.name for path in self.addons.iterdir() if path.is_dir()}
+        for name in addon_names:
             self.assertRegex(result.stdout, rf"(?m)^\s+\d+\. {re.escape(name)}$")
         self.assertNotIn("Яндекс", result.stdout + result.stderr)
         self.assertTrue((output / "SUCCESS").is_file())
@@ -194,10 +201,16 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             self.assertIn("homeassistant/.env", archive.getnames())
             self.assertNotIn("homeassistant/backups/old.tar.gz", archive.getnames())
             self.assertNotIn("homeassistant/.ha-backup.lock", archive.getnames())
-        with tarfile.open(output / f"plugin-future-plugin-{timestamp}.tar.gz") as archive:
-            self.assertEqual(archive.extractfile("plugins/future-plugin/data/state").read(), b"future-plugin saved state")
-        with tarfile.open(output / f"plugins-config-{timestamp}.tar.gz") as archive:
-            self.assertEqual(set(archive.getnames()), {"plugins/.env", "plugins/docker-compose.yml"})
+            link = archive.getmember("homeassistant/config/custom_components/yandex_smart_home")
+            self.assertTrue(link.issym())
+            self.assertEqual(link.linkname, "/integrations/yandex_smart_home/custom_components/yandex_smart_home")
+            self.assertEqual(archive.extractfile(
+                "homeassistant/config/integration-versions/yandex_smart_home.commit").read(), b"1" * 40 + b"\n")
+            self.assertFalse(any(name.startswith("integrations/") for name in archive.getnames()))
+        with tarfile.open(output / f"addon-future-addon-{timestamp}.tar.gz") as archive:
+            self.assertEqual(archive.extractfile("addons/future-addon/data/state").read(), b"future-addon saved state")
+        with tarfile.open(output / f"addons-config-{timestamp}.tar.gz") as archive:
+            self.assertEqual(set(archive.getnames()), {"addons/.env", "addons/docker-compose.yml"})
         checksum_lines = (output / "SHA256SUMS").read_text().splitlines()
         self.assertEqual({line.split("  ", 1)[1] for line in checksum_lines}, expected)
         for line in checksum_lines:
@@ -215,6 +228,9 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             self.assertIn(message, result.stdout + result.stderr)
             self.assertIn(message, (output / "backup.log").read_text())
         report = json.loads((output / "result.json").read_text())
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["paths"]["addons"], str(self.addons))
+        self.assertEqual(report["selected_addons"], "matter-server")
         self.assertEqual(report["status"], "success")
         self.assertEqual(report["backup_status"], "verified")
         self.assertEqual(report["services_status"], "running")
@@ -227,19 +243,19 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertFalse(report["downtime_ongoing"])
         self.assertEqual({item["name"] for item in report["archives"]}, expected)
         self.assertEqual({item["component"] for item in report["archives"]},
-                         plugin_names | {"Home Assistant + MQTT", "Общие настройки плагинов"})
+                         addon_names | {"Home Assistant + MQTT", "Общие настройки дополнений"})
         for item in report["archives"]:
             self.assertEqual(item["status"], "verified")
             self.assertEqual(item["sha256"], hashlib.sha256((output / item["name"]).read_bytes()).hexdigest())
         mutations = self.mutations()
         self.assertEqual(mutations[0][0], "compose")
-        self.assertIn(str(self.plugins), mutations[0])
+        self.assertIn(str(self.addons), mutations[0])
         self.assertEqual(mutations[0][-6:], ["--profile", "*", "stop", "--timeout", "60", "matter-server"])
         self.assertIn("stop", mutations[1])
         self.assertIn(str(self.main), mutations[1])
         self.assertIn(str(self.main), mutations[2])
         self.assertIn("up", mutations[2])
-        self.assertIn(str(self.plugins), mutations[3])
+        self.assertIn(str(self.addons), mutations[3])
         self.assertFalse(any("pull" in command for command in mutations))
 
     def test_refusal_empty_input_eof_and_other_words_never_stop_services(self):
@@ -316,7 +332,7 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
             time.sleep(0.05)
         self.assertTrue(self.marker.exists(), "first backup never reached archive step")
         mutations = self.mutations()
-        second = subprocess.run(self.command(self.main, self.plugins, self.root / "other-backups"),
+        second = subprocess.run(self.command(self.main, self.addons, self.root / "other-backups"),
             input="yes\n", text=True, capture_output=True,
             env=self.env, timeout=10)
         self.assertNotEqual(second.returncode, 0)
@@ -358,7 +374,7 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
     @unittest.skipIf(os.geteuid() == 0, "Real Unix access-denied checks require an unprivileged test process")
     def test_unreadable_file_and_directory_fail_before_stopping(self):
         file = self.main / "config/.storage/test"
-        directory = self.plugins / "matter-server/data"
+        directory = self.addons / "matter-server/data"
         file.chmod(0)
         directory.chmod(0)
         self.addCleanup(file.chmod, 0o600)
@@ -428,7 +444,7 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
 
     def test_sudo_caller_owns_failed_copy_and_new_destination_parents(self):
         destination = self.root / "new-parent/nested/backups"
-        result = self.invoke(args=(self.main, self.plugins, destination), FAIL_ARCHIVE="1",
+        result = self.invoke(args=(self.main, self.addons, destination), FAIL_ARCHIVE="1",
                              SUDO_UID=str(os.getuid()), SUDO_GID=str(os.getgid()))
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assert_running()

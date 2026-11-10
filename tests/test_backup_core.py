@@ -26,27 +26,27 @@ class BackupCoreTests(unittest.TestCase):
         with patch.object(sys, "path", [str(ROOT / "system"), *sys.path]):
             cls.module = runpy.run_path(str(ROOT / "system/backup.py"), run_name="backup_test")
 
-    def test_discovery_after_adding_and_renaming_arbitrary_plugins(self):
+    def test_discovery_after_adding_and_renaming_arbitrary_addons(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            main, plugins = root / "homeassistant", root / "plugins"
+            main, addons = root / "homeassistant", root / "addons"
             (main / "config").mkdir(parents=True)
             (main / "mosquitto").mkdir()
-            plugins.mkdir()
-            for folder in (main, plugins):
+            addons.mkdir()
+            for folder in (main, addons):
                 (folder / "docker-compose.yml").touch()
             names = {"arbitrary-addon", "another.addon", "documentation-only"}
             for name in names:
-                (plugins / name).mkdir()
+                (addons / name).mkdir()
             discover = self.module["plan"]
-            tasks = discover(main, plugins, "STAMP")
+            tasks = discover(main, addons, "STAMP")
             self.assertEqual({t.label for t in tasks[1:-1]}, names)
-            (plugins / "arbitrary-addon").rename(plugins / "renamed-addon")
-            (plugins / "new-addon").mkdir()
+            (addons / "arbitrary-addon").rename(addons / "renamed-addon")
+            (addons / "new-addon").mkdir()
             names = names - {"arbitrary-addon"} | {"renamed-addon", "new-addon"}
-            tasks = discover(main, plugins, "STAMP")
+            tasks = discover(main, addons, "STAMP")
             self.assertEqual({t.label for t in tasks[1:-1]}, names)
-            self.assertEqual({t.name for t in tasks[1:-1]}, {f"plugin-{name}-STAMP.tar.gz" for name in names})
+            self.assertEqual({t.name for t in tasks[1:-1]}, {f"addon-{name}-STAMP.tar.gz" for name in names})
 
     def test_owner_uses_sudo_ids_and_direct_root_stays_root(self):
         access = self.module["BackupAccess"]

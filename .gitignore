@@ -15,7 +15,9 @@ id_ed25519
 *.p12
 *.pfx
 
-repos/
+# Local integration clones; keep the installation guide public.
+/integrations/*
+!/integrations/readme.md
 
 # Home Assistant, MQTT, Zigbee, Matter, and editor runtime state
 /homeassistant/config/
@@ -33,10 +35,10 @@ repos/
 tools/cockpit/listen.conf
 .storage/
 data/
-# Clone plugin data directories, but publish only their empty placeholders.
-!/plugins/*/data/
-/plugins/*/data/*
-!/plugins/*/data/.stub
+# Clone addon data directories, but publish only their empty placeholders.
+!/addons/*/data/
+/addons/*/data/*
+!/addons/*/data/.stub
 
 # Backups, databases, logs, and local copies
 backups/

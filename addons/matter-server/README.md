@@ -1,24 +1,24 @@
 # Matter Server
 
-Сервис и профиль `matter-server` находятся в [общем Compose плагинов](../docker-compose.yml). По умолчанию профиль выключен, образ не скачивается и контейнер не создаётся. Данные хранятся в `plugins/matter-server/data/` и монтируются в `/data`; бэкап всего `plugins/` включает контроллер, сертификаты и сведения о сопряжённых устройствах.
+Сервис и профиль `matter-server` находятся в [общем Compose дополнений](../docker-compose.yml). По умолчанию профиль выключен, образ не скачивается и контейнер не создаётся. Данные хранятся в `addons/matter-server/data/` и монтируются в `/data`; бэкап всего `addons/` включает контроллер, сертификаты и сведения о сопряжённых устройствах.
 
 ## Подготовка и включение
 
-Используйте [клон проекта на Raspberry Pi](../../readme.md#клонирование-репозитория). Каталог `plugins/matter-server/data/` должен существовать до запуска; в клоне он создаётся благодаря пустому `.stub`. Для существующей установки сохраните перенесённые данные контроллера.
+Используйте [клон проекта на Raspberry Pi](../../readme.md#клонирование-репозитория). Каталог `addons/matter-server/data/` должен существовать до запуска; в клоне он создаётся благодаря пустому `.stub`. Для существующей установки сохраните перенесённые данные контроллера.
 
-1. В `plugins/.env` задайте `MATTER_PRIMARY_INTERFACE` и `MATTER_BLUETOOTH_ADAPTER`: интерфейс с рабочим IPv6 и индекс адаптера BlueZ (`hci0` → `0`). При необходимости выберите версию или digest в `MATTER_SERVER_IMAGE`; по умолчанию сохранён образ `ghcr.io/home-assistant-libs/python-matter-server:stable`.
+1. В `addons/.env` задайте `MATTER_PRIMARY_INTERFACE` и `MATTER_BLUETOOTH_ADAPTER`: интерфейс с рабочим IPv6 и индекс адаптера BlueZ (`hci0` → `0`). При необходимости выберите версию или digest в `MATTER_SERVER_IMAGE`; по умолчанию сохранён образ `ghcr.io/home-assistant-libs/python-matter-server:stable`.
 2. Подготовьте сертификаты по [инструкции ниже](#ручная-загрузка-сертификатов-при-недоступности-dcl-из-рф) до первого запуска: обращение к DCL в этом Compose заблокировано.
-3. Добавьте `matter-server` к `COMPOSE_PROFILES` в `plugins/.env`. Например, `COMPOSE_PROFILES=matter-server` включает только Matter; `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator,matter-server` — все три плагина.
+3. Добавьте `matter-server` к `COMPOSE_PROFILES` в `addons/.env`. Например, `COMPOSE_PROFILES=matter-server` включает только Matter; `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator,matter-server` — все три дополнения.
 4. После запуска основного стека выполните:
 
    ```bash
-   bash /home/hauser/home_assistant_config/system/plugins.sh apply /home/hauser/home_assistant_config/plugins
-   bash /home/hauser/home_assistant_config/system/plugins.sh check /home/hauser/home_assistant_config/plugins
+   bash /home/hauser/home_assistant_config/system/addons.sh apply /home/hauser/home_assistant_config/addons
+   bash /home/hauser/home_assistant_config/system/addons.sh check /home/hauser/home_assistant_config/addons
    ```
 
 5. [Добавьте интеграцию Matter в HA](#включение-интеграции-matter).
 
-Контейнер использует `network_mode: host` с доступом к D-Bus и USB. Порт `5580` слушает непосредственно на хосте: `PLUGINS_BIND_IP` и переназначение опубликованных портов на него не распространяются. Дальнейшие команды обслуживания предназначены для включённого профиля и уже скачанного образа.
+Контейнер использует `network_mode: host` с доступом к D-Bus и USB. Порт `5580` слушает непосредственно на хосте: `ADDONS_BIND_IP` и переназначение опубликованных портов на него не распространяются. Дальнейшие команды обслуживания предназначены для включённого профиля и уже скачанного образа.
 
 ## Сеть и параметры запуска
 
@@ -56,12 +56,12 @@ Home Assistant и Matter Server работают в режиме `host` на о�
 
 ## Ручная загрузка сертификатов при недоступности DCL из РФ
 
-В текущем Compose доступ к `on.dcl.csa-iot.org` намеренно заблокирован. Сертификаты PAA хранятся на хосте в `/home/hauser/home_assistant_config/plugins/matter-server/data/credentials/`; контейнер видит этот каталог как `/data/credentials` благодаря параметру `--paa-root-cert-dir`.
+В текущем Compose доступ к `on.dcl.csa-iot.org` намеренно заблокирован. Сертификаты PAA хранятся на хосте в `/home/hauser/home_assistant_config/addons/matter-server/data/credentials/`; контейнер видит этот каталог как `/data/credentials` благодаря параметру `--paa-root-cert-dir`.
 
 Остановите Matter Server и подготовьте каталоги на Raspberry Pi:
 
 ```bash
-cd /home/hauser/home_assistant_config/plugins
+cd /home/hauser/home_assistant_config/addons
 docker compose --profile matter-server stop --timeout 60 matter-server
 sudo mkdir -p ./matter-server/data/credentials
 mkdir -p /home/hauser/paa-root-certs
@@ -72,7 +72,7 @@ mkdir -p /home/hauser/paa-root-certs
 Убедитесь, что загруженные `.der` уже находятся в указанном каталоге. Скопируйте их в хранилище и создайте служебный файл `.version` только после успешного копирования:
 
 ```bash
-cd /home/hauser/home_assistant_config/plugins
+cd /home/hauser/home_assistant_config/addons
 sudo cp /home/hauser/paa-root-certs/*.der ./matter-server/data/credentials/ &&
   printf '1\n' | sudo tee ./matter-server/data/credentials/.version > /dev/null
 ```
@@ -82,7 +82,7 @@ sudo cp /home/hauser/paa-root-certs/*.der ./matter-server/data/credentials/ &&
 После успешного копирования включите профиль в `.env`, примените его и проверьте журнал:
 
 ```bash
-bash /home/hauser/home_assistant_config/system/plugins.sh apply /home/hauser/home_assistant_config/plugins
+bash /home/hauser/home_assistant_config/system/addons.sh apply /home/hauser/home_assistant_config/addons
 docker logs --tail 50 matter-server
 ```
 
@@ -94,7 +94,7 @@ docker logs --tail 50 matter-server
 docker restart matter-server
 ```
 
-Перезапуск сохраняет данные в `plugins/matter-server/data/` и сопряжённые устройства.
+Перезапуск сохраняет данные в `addons/matter-server/data/` и сопряжённые устройства.
 
 ## Логи Matter
 
@@ -115,11 +115,11 @@ docker logs matter-server
 ## Пересоздание контейнера Matter с сохранением устройств
 
 ```bash
-cd /home/hauser/home_assistant_config/plugins
+cd /home/hauser/home_assistant_config/addons
 docker compose --profile matter-server up -d --pull never --no-deps --force-recreate matter-server
 ```
 
-Compose пересоздаст только Matter Server. Каталог `plugins/matter-server/data/`, сертификаты и данные сопряжения сохранятся.
+Compose пересоздаст только Matter Server. Каталог `addons/matter-server/data/`, сертификаты и данные сопряжения сохранятся.
 
 ## Полный сброс Matter
 
@@ -128,7 +128,7 @@ Compose пересоздаст только Matter Server. Каталог `plugi
 Для полного сброса с возможностью восстановления остановите и удалите контейнер, затем перенесите хранилище в резервную копию:
 
 ```bash
-cd /home/hauser/home_assistant_config/plugins
+cd /home/hauser/home_assistant_config/addons
 docker compose --profile matter-server stop --timeout 60 matter-server
 docker compose --profile matter-server rm -f matter-server
 

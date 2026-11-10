@@ -8,7 +8,7 @@ if [[ ${1:-} == --check ]]; then
   shift
 fi
 if [[ $# -gt 3 || ${1:-} == --help ]]; then
-  printf 'Usage: %s [--check] [HOMEASSISTANT_DIR [TOOLS_DIR [PLUGINS_DIR]]]\n' "$0"
+  printf 'Usage: %s [--check] [HOMEASSISTANT_DIR [TOOLS_DIR [ADDONS_DIR]]]\n' "$0"
   exit 2
 fi
 
@@ -32,11 +32,11 @@ else
 fi
 tools_dir=$(cd -- "$tools_dir" && pwd)
 if [[ $# -ge 3 ]]; then
-  plugins_dir=$3
+  addons_dir=$3
 else
-  plugins_dir=$(dirname -- "$main_dir")/plugins
+  addons_dir=$(dirname -- "$main_dir")/addons
 fi
-plugins_dir=$(cd -- "$plugins_dir" && pwd)
+addons_dir=$(cd -- "$addons_dir" && pwd)
 projects=("$tools_dir/portainer")
 if [[ -f "$tools_dir/uptime-kuma/docker-compose.yml" ]]; then
   projects+=("$tools_dir/uptime-kuma")
@@ -62,7 +62,7 @@ docker compose version >/dev/null
 for project_dir in "$main_dir" "${projects[@]}"; do
   compose "$project_dir" config --quiet
 done
-bash "$script_dir/plugins.sh" validate "$plugins_dir"
+bash "$script_dir/addons.sh" validate "$addons_dir"
 
 if ! "$check_only"; then
   for unit in containerd.service docker.service; do
@@ -84,9 +84,9 @@ done
 docker info >/dev/null
 
 if "$check_only"; then
-  bash "$script_dir/ha.sh" check "$main_dir" "$plugins_dir"
+  bash "$script_dir/ha.sh" check "$main_dir" "$addons_dir"
 else
-  bash "$script_dir/ha.sh" start "$main_dir" "$plugins_dir"
+  bash "$script_dir/ha.sh" start "$main_dir" "$addons_dir"
 fi
 
 for project_dir in "${projects[@]}"; do

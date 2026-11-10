@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 
-class PluginError(Exception):
+class AddonError(Exception):
     """A Compose or container lifecycle problem."""
 
 
@@ -18,15 +18,15 @@ def run(args, *, capture=True):
     result = subprocess.run(args, text=True, capture_output=capture, check=False)
     if result.returncode:
         # Parser errors may contain interpolated values; never dump configuration.
-        raise PluginError(f"{args[0]} command failed (exit {result.returncode}); check Docker and Compose settings")
+        raise AddonError(f"{args[0]} command failed (exit {result.returncode}); check Docker and Compose settings")
     return result.stdout.strip() if capture else ""
 
 
-class Plugins:
+class Addons:
     def __init__(self, directory):
         self.directory = Path(directory).resolve()
         if not (self.directory / "docker-compose.yml").is_file():
-            raise PluginError(f"Compose file not found in {self.directory}")
+            raise AddonError(f"Compose file not found in {self.directory}")
         env_file = self.directory / ".env"
         self.command = [
             "docker", "compose", "--project-directory", str(self.directory),
@@ -43,7 +43,7 @@ class Plugins:
                           for profile in service.get("profiles", [])}
         selected = self.config.get("x-enabled-profiles") or ""
         if set(filter(None, selected.split(","))) - known_profiles:
-            raise PluginError("Unknown profile; check COMPOSE_PROFILES against the profiles in Compose")
+            raise AddonError("Unknown profile; check COMPOSE_PROFILES against the profiles in Compose")
 
     def compose(self, *args, capture=True):
         return run(self.command + list(args), capture=capture)
@@ -60,11 +60,11 @@ class Plugins:
         for container in found:
             labels = container.get("Config", {}).get("Labels") or {}
             if labels.get("com.docker.compose.project") != self.project:
-                raise PluginError("Container ownership does not match the Compose project")
+                raise AddonError("Container ownership does not match the Compose project")
             if labels.get("com.docker.compose.oneoff", "false").lower() == "true":
                 continue
             if not labels.get("com.docker.compose.service"):
-                raise PluginError("Container is missing its Compose service label")
+                raise AddonError("Container is missing its Compose service label")
             managed.append(container)
         # Never adopt/remove a same-name container from the old stack or another project.
         for service, spec in (self.all_config.get("services") or {}).items():
@@ -78,7 +78,7 @@ class Plugins:
                 labels = container.get("Config", {}).get("Labels") or {}
                 if (labels.get("com.docker.compose.project") != self.project
                         or labels.get("com.docker.compose.service") != service):
-                    raise PluginError(f"{service}: name is used by another project; resolve the container_name conflict first")
+                    raise AddonError(f"{service}: name is used by another project; resolve the container_name conflict first")
         return managed
 
     @staticmethod
@@ -90,18 +90,18 @@ class Plugins:
         for container in found:
             service = self.service_name(container)
             if service not in self.services:
-                raise PluginError(f"{service}: disabled container still exists; run plugins.sh apply")
+                raise AddonError(f"{service}: disabled container still exists; run addons.sh apply")
         for service in self.services:
             containers = [c for c in found if self.service_name(c) == service]
             if not containers:
-                raise PluginError(f"{service}: container is missing")
+                raise AddonError(f"{service}: container is missing")
             for container in containers:
                 policy = container["HostConfig"]["RestartPolicy"]["Name"]
                 if not container["State"]["Running"] or policy not in ("unless-stopped", "always"):
-                    raise PluginError(f"{service}: container must be running with restart unless-stopped or always")
+                    raise AddonError(f"{service}: container must be running with restart unless-stopped or always")
                 health = container["State"].get("Health", {}).get("Status")
                 if health and health != "healthy":
-                    raise PluginError(f"{service}: container is not healthy")
+                    raise AddonError(f"{service}: container is not healthy")
             print(f"{service}: running, restart policy checked")
 
     def stop_containers(self, containers, *, timeout):
@@ -121,7 +121,7 @@ class Plugins:
     def stop(self):
         # Stop the entire managed project, including no-longer-selected services.
         self.stop_containers(self.containers(), timeout=60)
-        print("Plugin containers: stopped; data and containers preserved")
+        print("Addon containers: stopped; data and containers preserved")
 
     def apply(self, *, pull):
         found = self.containers()
@@ -145,19 +145,19 @@ def main():
     parser.add_argument("action", choices=("validate", "check", "apply", "start", "stop"),
                         help="validate: Compose only; check: read-only; apply: pull and reconcile; start: no pull; stop: preserve containers")
     root = Path(__file__).resolve().parents[1]
-    default_dir = root / "plugins" if (root / "homeassistant/docker-compose.yml").is_file() else root.parent / "plugins"
+    default_dir = root / "addons" if (root / "homeassistant/docker-compose.yml").is_file() else root.parent / "addons"
     parser.add_argument("directory", nargs="?", default=default_dir)
     args = parser.parse_args()
     try:
-        plugins = Plugins(args.directory)
-        plugins.validate()
+        addons = Addons(args.directory)
+        addons.validate()
         if args.action == "check":
-            plugins.check()
+            addons.check()
         elif args.action == "stop":
-            plugins.stop()
+            addons.stop()
         elif args.action in ("apply", "start"):
-            plugins.apply(pull=args.action == "apply")
-    except (PluginError, OSError, ValueError, KeyError) as error:
+            addons.apply(pull=args.action == "apply")
+    except (AddonError, OSError, ValueError, KeyError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     return 0

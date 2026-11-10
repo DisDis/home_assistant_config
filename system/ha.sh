@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Control the HA stack and optional plugins; image updates are explicit maintenance.
+# Control the HA stack and optional addons; image updates are explicit maintenance.
 set -euo pipefail
 
 usage() {
-  printf 'Usage: %s {start|stop|restart|check} [HOMEASSISTANT_DIR [PLUGINS_DIR]]\n' "$0"
+  printf 'Usage: %s {start|stop|restart|check} [HOMEASSISTANT_DIR [ADDONS_DIR]]\n' "$0"
 }
 
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
@@ -30,8 +30,8 @@ else
   main_dir=$(dirname -- "$script_dir")
 fi
 main_dir=$(cd -- "$main_dir" && pwd)
-plugins_dir=${2:-$(dirname -- "$main_dir")/plugins}
-plugins_dir=$(cd -- "$plugins_dir" && pwd)
+addons_dir=${2:-$(dirname -- "$main_dir")/addons}
+addons_dir=$(cd -- "$addons_dir" && pwd)
 
 main_compose=(docker compose --project-directory "$main_dir" -f "$main_dir/docker-compose.yml")
 if [[ -f "$main_dir/.env" ]]; then
@@ -42,18 +42,18 @@ fi
 
 # Reject invalid Compose configuration before stopping or starting anything.
 "${main_compose[@]}" config --quiet
-bash "$script_dir/plugins.sh" validate "$plugins_dir"
+bash "$script_dir/addons.sh" validate "$addons_dir"
 
 start_system() {
   "${main_compose[@]}" up -d --pull never --wait --wait-timeout 60
-  bash "$script_dir/plugins.sh" start "$plugins_dir"
-  printf 'HA and selected plugins: started\n'
+  bash "$script_dir/addons.sh" start "$addons_dir"
+  printf 'HA and selected addons: started\n'
 }
 
 stop_system() {
-  bash "$script_dir/plugins.sh" stop "$plugins_dir"
+  bash "$script_dir/addons.sh" stop "$addons_dir"
   "${main_compose[@]}" stop --timeout 60
-  printf 'HA and plugins: stopped\n'
+  printf 'HA and addons: stopped\n'
 }
 
 check_system() {
@@ -76,7 +76,7 @@ check_system() {
       printf '%s: running, restart=%s\n' "$service" "$policy"
     done <<< "$ids"
   done <<< "$services"
-  bash "$script_dir/plugins.sh" check "$plugins_dir"
+  bash "$script_dir/addons.sh" check "$addons_dir"
 }
 
 case "$action" in

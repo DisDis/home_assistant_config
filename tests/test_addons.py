@@ -13,28 +13,28 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_NAMES = ("zigbee2mqtt", "hass-configurator", "matter-server")
+ADDON_NAMES = ("zigbee2mqtt", "hass-configurator", "matter-server")
 
 
 @unittest.skipUnless(shutil.which("docker"), "Docker Compose CLI is required")
-class PluginTests(unittest.TestCase):
+class AddonTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ha-compose-tests-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.plugins = self.root / "plugins"
-        self.plugins.mkdir()
-        shutil.copy(ROOT / "plugins/docker-compose.yml", self.plugins)
+        self.addons = self.root / "addons"
+        self.addons.mkdir()
+        shutil.copy(ROOT / "addons/docker-compose.yml", self.addons)
         self.main = self.root / "homeassistant"
         self.main.mkdir()
         self.system = self.root / "system"
         self.system.mkdir(parents=True)
-        for name in ("ha.sh", "plugins.py", "plugins.sh", "autostart.sh"):
+        for name in ("ha.sh", "addons.py", "addons.sh", "autostart.sh"):
             shutil.copy(ROOT / "system" / name, self.system)
         shutil.copy(ROOT / "homeassistant/docker-compose.yml", self.main)
         (self.main / "config").mkdir()
-        for service in PLUGIN_NAMES:
-            data = self.plugins / service / "data"
+        for service in ADDON_NAMES:
+            data = self.addons / service / "data"
             data.mkdir(parents=True)
             (data / "sentinel").write_text("existing state")
         for tool in ("portainer", "uptime-kuma"):
@@ -53,7 +53,7 @@ class PluginTests(unittest.TestCase):
         self.log = self.root / "docker.jsonl"
         self.state = self.root / "state.json"
         self.state.write_text("{}")
-        prefixes = ("COMPOSE_", "HC_", "HA_", "PLUGINS_", "ZIGBEE", "HASS_CONFIGURATOR", "MATTER_")
+        prefixes = ("COMPOSE_", "HC_", "HA_", "ADDONS_", "ZIGBEE", "HASS_CONFIGURATOR", "MATTER_")
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
         self.env.update(PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         REAL_DOCKER=shutil.which("docker"), FAKE_DOCKER_LOG=str(self.log),
@@ -61,7 +61,7 @@ class PluginTests(unittest.TestCase):
         self.select(())
 
     def select(self, profiles, extra=""):
-        (self.plugins / ".env").write_text("COMPOSE_PROFILES=" + ",".join(profiles) + "\n" + extra)
+        (self.addons / ".env").write_text("COMPOSE_PROFILES=" + ",".join(profiles) + "\n" + extra)
 
     def command(self, args, *, success=True, env=None, cwd=None):
         result = subprocess.run(args, env=env or self.env, cwd=cwd or self.root,
@@ -72,8 +72,8 @@ class PluginTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
 
-    def plugin(self, action, **kwargs):
-        return self.command(["bash", str(self.system / "plugins.sh"), action, str(self.plugins)], **kwargs)
+    def addon(self, action, **kwargs):
+        return self.command(["bash", str(self.system / "addons.sh"), action, str(self.addons)], **kwargs)
 
     def commands(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -85,21 +85,21 @@ class PluginTests(unittest.TestCase):
     def managed(self):
         return {c["Config"]["Labels"]["com.docker.compose.service"]
                 for c in json.loads(self.state.read_text()).values()
-                if c["Config"]["Labels"]["com.docker.compose.project"] == "ha-plugins"}
+                if c["Config"]["Labels"]["com.docker.compose.project"] == "ha-addons"}
 
     def config(self, all_profiles=False):
-        args = ["docker", "compose", "--project-directory", str(self.plugins), "--env-file", str(self.plugins / ".env"),
-                "-f", str(self.plugins / "docker-compose.yml")]
+        args = ["docker", "compose", "--project-directory", str(self.addons), "--env-file", str(self.addons / ".env"),
+                "-f", str(self.addons / "docker-compose.yml")]
         if all_profiles:
             args += ["--profile", "*"]
         return json.loads(self.command(args + ["config", "--format", "json"]).stdout)
 
-    def test_arbitrary_plugin_and_group_profile_need_no_script_changes(self):
-        compose = self.plugins / "docker-compose.yml"
+    def test_arbitrary_addon_and_group_profile_need_no_script_changes(self):
+        compose = self.addons / "docker-compose.yml"
         addition = '''
   arbitrary-service:
     profiles: [extra]
-    image: registry.example.org/vendor/plugin:1.2.3
+    image: registry.example.org/vendor/addon:1.2.3
     restart: unless-stopped
     volumes:
       - ./arbitrary/data:/data
@@ -110,29 +110,32 @@ class PluginTests(unittest.TestCase):
 '''
         compose.write_text(compose.read_text().replace("\nnetworks:\n", addition + "\nnetworks:\n"))
         self.select(("extra",))
-        self.plugin("apply")
+        self.addon("apply")
         self.assertEqual(self.managed(), {"arbitrary-service", "companion"})
         self.select(())
-        self.plugin("apply")
+        self.addon("apply")
         self.assertEqual(self.managed(), set())
 
     def test_application_settings_are_not_validated_by_helper(self):
-        self.select(PLUGIN_NAMES, "HC_PASSWORD=''\nZIGBEE_ADAPTER_PATH=/no/such/device\nHA_DIR=/missing/main\nMATTER_PRIMARY_INTERFACE=missing-interface\n")
-        self.plugin("validate")
+        self.select(ADDON_NAMES, "HC_PASSWORD=''\nZIGBEE_ADAPTER_PATH=/no/such/device\nHA_DIR=/missing/main\nMATTER_PRIMARY_INTERFACE=missing-interface\n")
+        self.addon("validate")
         self.assertFalse(self.mutations())
 
     def test_data_mounts_are_separate_and_editor_shares_live_ha_config(self):
-        services = self.config(all_profiles=True)["services"]
+        self.select((), "ADDONS_BIND_IP=192.0.2.10\n")
+        config = self.config(all_profiles=True)
+        self.assertEqual(config["name"], "ha-addons")
+        services = config["services"]
         for service, target in (("zigbee2mqtt", "/app/data"), ("hass-configurator", "/config"), ("matter-server", "/data")):
             source = next(v["source"] for v in services[service]["volumes"] if v["target"] == target)
-            self.assertEqual(Path(source), self.plugins / service / "data")
+            self.assertEqual(Path(source), self.addons / service / "data")
         shared = next(v for v in services["hass-configurator"]["volumes"] if v["target"] == "/hass-config")
         self.assertEqual(Path(shared["source"]), self.main / "config")
         self.assertFalse(shared.get("bind", {}).get("create_host_path", False))
         for service in services.values():
             self.assertEqual(service["logging"]["options"], {"max-size": "10m", "max-file": "3"})
             if service.get("network_mode") != "host":
-                self.assertEqual(service["ports"][0]["host_ip"], "127.0.0.1")
+                self.assertEqual(service["ports"][0]["host_ip"], "192.0.2.10")
             self.assertNotIn(":latest", service["image"])
 
     def test_matter_is_optional_and_keeps_host_network_and_hardware_access(self):
@@ -140,6 +143,9 @@ class PluginTests(unittest.TestCase):
             "docker", "compose", "--project-directory", str(self.main),
             "--env-file", os.devnull, "config", "--format", "json"]).stdout)
         self.assertEqual(set(main["services"]), {"homeassistant", "mosquitto"})
+        integrations = next(v for v in main["services"]["homeassistant"]["volumes"]
+                            if v["target"] == "/integrations")
+        self.assertEqual(Path(integrations["source"]), self.root / "integrations")
         matter = self.config(all_profiles=True)["services"]["matter-server"]
         self.assertEqual(matter["profiles"], ["matter-server"])
         self.assertEqual(matter["network_mode"], "host")
@@ -147,7 +153,7 @@ class PluginTests(unittest.TestCase):
         mounts = {v["target"]: v["source"] for v in matter["volumes"]}
         self.assertEqual(mounts["/run/dbus"], "/run/dbus")
         self.assertEqual(mounts["/dev/bus/usb"], "/dev/bus/usb")
-        self.assertEqual(mounts["/data"], str(self.plugins / "matter-server/data"))
+        self.assertEqual(mounts["/data"], str(self.addons / "matter-server/data"))
         self.assertIn("/data/credentials", matter["command"])
         self.assertIn("/data/updates", matter["command"])
 
@@ -203,56 +209,56 @@ while True:
 
     def test_unknown_profile_fails_before_mutations(self):
         self.select(("misspelled",))
-        self.assertIn("Unknown profile", self.plugin("apply", success=False).stderr)
+        self.assertIn("Unknown profile", self.addon("apply", success=False).stderr)
         self.assertFalse(self.mutations())
 
     def test_start_and_repeated_apply_do_not_remove_selected_services(self):
-        self.select(PLUGIN_NAMES)
-        self.plugin("apply")
+        self.select(ADDON_NAMES)
+        self.addon("apply")
         self.log.write_text("")
-        self.plugin("start")
+        self.addon("start")
         self.assertFalse(any("pull" in c for c in self.commands() if c[0] == "compose"))
         self.assertFalse(any(c[0] in ("stop", "rm") for c in self.commands()))
-        self.plugin("apply")
+        self.addon("apply")
         self.assertFalse(any(c[0] in ("stop", "rm") for c in self.commands()))
 
     def test_foreign_container_is_not_adopted_or_removed(self):
         self.select(("zigbee2mqtt",))
-        self.plugin("apply")
+        self.addon("apply")
         state = json.loads(self.state.read_text())
         state["zigbee2mqtt"]["Config"]["Labels"]["com.docker.compose.project"] = "legacy-main"
         self.state.write_text(json.dumps(state))
         self.select(())
         self.log.write_text("")
-        self.assertIn("another project", self.plugin("apply", success=False).stderr)
+        self.assertIn("another project", self.addon("apply", success=False).stderr)
         self.assertFalse(self.mutations())
         self.assertEqual(json.loads(self.state.read_text()), state)
 
     def test_pull_failure_keeps_previously_running_services(self):
-        self.select(PLUGIN_NAMES)
-        self.plugin("apply")
+        self.select(ADDON_NAMES)
+        self.addon("apply")
         state = self.state.read_text()
         self.select(("hass-configurator",))
         self.log.write_text("")
-        self.plugin("apply", success=False, env=dict(self.env, FAKE_FAIL_PULL="1"))
+        self.addon("apply", success=False, env=dict(self.env, FAKE_FAIL_PULL="1"))
         self.assertEqual(self.state.read_text(), state)
         self.assertFalse(any(c[0] in ("stop", "rm") or "up" in c for c in self.commands()))
 
     def test_check_is_read_only_and_reports_inactive_container(self):
         self.select(("zigbee2mqtt",))
-        self.plugin("apply")
+        self.addon("apply")
         self.select(())
         self.log.write_text("")
-        self.assertIn("disabled container", self.plugin("check", success=False).stderr)
+        self.assertIn("disabled container", self.addon("check", success=False).stderr)
         self.assertFalse(self.mutations())
 
     def test_removed_service_cleanup_preserves_other_projects_and_oneoff_jobs(self):
         self.select(("zigbee2mqtt",))
-        self.plugin("apply")
+        self.addon("apply")
         state = json.loads(self.state.read_text())
         for name, project, service, oneoff in (
-                ("retired", "ha-plugins", "retired-service", "False"),
-                ("oneoff", "ha-plugins", "ad-hoc-service", "True"),
+                ("retired", "ha-addons", "retired-service", "False"),
+                ("oneoff", "ha-addons", "ad-hoc-service", "True"),
                 ("unrelated", "another-project", "unrelated-service", "False")):
             c = json.loads(json.dumps(state["zigbee2mqtt"]))
             c["Id"], c["Name"] = name, "/" + name
@@ -262,12 +268,12 @@ while True:
             state[name] = c
         self.state.write_text(json.dumps(state))
         self.select(())
-        self.plugin("apply")
+        self.addon("apply")
         self.assertEqual(set(json.loads(self.state.read_text())), {"oneoff", "unrelated"})
 
     def test_check_reports_runtime_and_health_failures_without_mutating(self):
         self.select(("hass-configurator",))
-        self.plugin("apply")
+        self.addon("apply")
         state = json.loads(self.state.read_text())
         for reason in ("stopped", "restart", "health"):
             with self.subTest(reason=reason):
@@ -281,7 +287,7 @@ while True:
                     c["State"]["Health"] = {"Status": "unhealthy"}
                 self.state.write_text(json.dumps(modified))
                 self.log.write_text("")
-                self.plugin("check", success=False)
+                self.addon("check", success=False)
                 self.assertFalse(self.mutations())
 
     def test_documented_whole_system_stop_start_and_restart(self):
@@ -297,7 +303,7 @@ while True:
         self.select(profiles)
         self.command(["docker", "compose", "--project-directory", str(self.main),
                       "--env-file", os.devnull, "up", "-d", "--pull", "never"])
-        self.plugin("apply")
+        self.addon("apply")
         self.command(["docker", "compose", "--project-directory", str(self.root / "tools/portainer"),
                       "--env-file", os.devnull, "up", "-d", "--pull", "never"])
         (self.root / ".env").write_text("COMPOSE_PROFILES=wrong\n")
@@ -310,9 +316,9 @@ while True:
         commands = self.commands()
         stops = [c for c in commands if c[0] == "stop" or c[0] == "compose" and "stop" in c]
         self.assertEqual(stops[0][0], "compose")
-        self.assertIn(str(self.plugins), stops[0])
+        self.assertIn(str(self.addons), stops[0])
         self.assertEqual(stops[0][-6:], ["--profile", "*", "stop", "--timeout", "60", "matter-server"])
-        self.assertEqual(stops[1][0], "compose")  # Plugins stop before the main stack.
+        self.assertEqual(stops[1][0], "compose")  # Addons stop before the main stack.
         self.assertIn(str(self.main), stops[1])
         self.assertFalse(any("pull" in c or "up" in c or c[0] == "rm" for c in commands))
         for action in ("Запуск после остановки", "Перезапуск всей системы"):
@@ -323,7 +329,7 @@ while True:
             commands = self.commands()
             self.assertFalse(any("pull" in c for c in commands if c[0] == "compose"))
             starts = [c for c in commands if c[0] == "compose" and "up" in c]
-            self.assertNotIn("--project-name", starts[0])  # Main stack starts before plugins.
+            self.assertNotIn("--project-name", starts[0])  # Main stack starts before addons.
             if profiles:
                 self.assertIn("--project-name", starts[-1])
         self.log.write_text("")
@@ -332,11 +338,11 @@ while True:
 
     def test_stop_shows_compose_progress_and_preserves_oneoff_and_foreign_containers(self):
         self.select(("matter-server",))
-        self.plugin("apply")
+        self.addon("apply")
         state = json.loads(self.state.read_text())
         for name, project, service, oneoff in (
-                ("retired", "ha-plugins", "retired-service", "False"),
-                ("oneoff", "ha-plugins", "matter-server", "True"),
+                ("retired", "ha-addons", "retired-service", "False"),
+                ("oneoff", "ha-addons", "matter-server", "True"),
                 ("unrelated", "another-project", "matter-server", "False")):
             container = json.loads(json.dumps(state["matter-server"]))
             container.update(Id=name, Name="/" + name)
@@ -347,7 +353,7 @@ while True:
             state[name] = container
         self.state.write_text(json.dumps(state))
         self.log.write_text("")
-        result = self.plugin("stop")
+        result = self.addon("stop")
         self.assertIn("Container matter-server Stopping", result.stderr)
         self.assertIn("Container matter-server Stopped", result.stderr)
         state = json.loads(self.state.read_text())
@@ -362,7 +368,7 @@ while True:
         self.command(["bash", str(self.system / "ha.sh"), "restart"], success=False)
         self.assertFalse(self.mutations())
 
-    def test_controller_does_not_start_plugins_when_main_start_fails(self):
+    def test_controller_does_not_start_addons_when_main_start_fails(self):
         self.select(("matter-server",))
         self.command(["bash", str(self.system / "ha.sh"), "start"], success=False,
                      env=dict(self.env, FAKE_FAIL_UP="1"))
@@ -379,11 +385,11 @@ while True:
     def test_autostart_delegates_to_controller(self):
         self.select(("matter-server",))
         args = ["bash", str(self.system / "autostart.sh"), str(self.main),
-                str(self.root / "tools"), str(self.plugins)]
+                str(self.root / "tools"), str(self.addons)]
         self.command(args)
         starts = [c for c in self.commands() if c[0] == "compose" and "up" in c]
         self.assertIn(str(self.main), starts[0])
-        self.assertIn(str(self.plugins), starts[1])
+        self.assertIn(str(self.addons), starts[1])
         self.assertIn(str(self.root / "tools/portainer"), starts[2])
         self.assertFalse(any("pull" in c for c in self.commands() if c[0] == "compose"))
         self.log.write_text("")
@@ -394,7 +400,7 @@ while True:
         secret = "test-only-$literal#value"
         self.select(("hass-configurator",), "HC_USERNAME=admin\nHC_PASSWORD='" + secret + "'\n")
         (self.root / ".env").write_text("COMPOSE_PROFILES=wrong\n")
-        result = self.command(["bash", str(self.system / "plugins.sh"), "validate"])
+        result = self.command(["bash", str(self.system / "addons.sh"), "validate"])
         self.assertNotIn(secret, result.stdout + result.stderr)
         # The canonical config escapes dollars so it can be fed back to Compose.
         rendered = self.config()["services"]["hass-configurator"]["environment"]["HC_PASSWORD"]
