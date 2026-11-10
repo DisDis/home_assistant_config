@@ -2,7 +2,7 @@ services:
   # 1. Основной контейнер Home Assistant
   homeassistant:
     container_name: homeassistant
-    image: ghcr.io/home-assistant/home-assistant:stable
+    image: ${HOMEASSISTANT_IMAGE:-ghcr.io/home-assistant/home-assistant:stable}
     volumes:
       - ./config:/config
       - ../integrations:/integrations
@@ -20,7 +20,7 @@ services:
   # 2. MQTT Брокер (Mosquitto)
   mosquitto:
     container_name: mosquitto
-    image: eclipse-mosquitto:latest
+    image: ${MOSQUITTO_IMAGE:-eclipse-mosquitto:latest}
     ports:
       - "1883:1883"
       - "9001:9001"

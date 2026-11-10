@@ -125,9 +125,10 @@ class Addons:
 
     def apply(self, *, pull):
         found = self.containers()
-        if self.services and pull:
+        if self.services:
             # Explicit selection prevents inactive profiles from being downloaded.
-            self.compose("pull", *self.services, capture=False)
+            policy = "always" if pull else "missing"
+            self.compose("pull", "--policy", policy, *self.services, capture=False)
         disabled = [c for c in found if self.service_name(c) not in self.services]
         if disabled:
             self.stop_containers(disabled, timeout=30)
@@ -143,7 +144,7 @@ class Addons:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("validate", "check", "apply", "start", "stop"),
-                        help="validate: Compose only; check: read-only; apply: pull and reconcile; start: no pull; stop: preserve containers")
+                        help="validate: Compose only; check: read-only; apply: pull and reconcile; start: pull missing and refresh latest; stop: preserve containers")
     root = Path(__file__).resolve().parents[1]
     default_dir = root / "addons" if (root / "homeassistant/docker-compose.yml").is_file() else root.parent / "addons"
     parser.add_argument("directory", nargs="?", default=default_dir)

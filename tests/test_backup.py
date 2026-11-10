@@ -253,10 +253,16 @@ os.execv(os.environ["REAL_TAR"], [os.environ["REAL_TAR"], *args])
         self.assertEqual(mutations[0][-6:], ["--profile", "*", "stop", "--timeout", "60", "matter-server"])
         self.assertIn("stop", mutations[1])
         self.assertIn(str(self.main), mutations[1])
-        self.assertIn(str(self.main), mutations[2])
-        self.assertIn("up", mutations[2])
-        self.assertIn(str(self.addons), mutations[3])
-        self.assertFalse(any("pull" in command for command in mutations))
+        starts = mutations[2:]
+        self.assertEqual(len(starts), 4)
+        self.assertIn(str(self.main), starts[0])
+        self.assertEqual(starts[0][-3:], ["pull", "--policy", "missing"])
+        self.assertIn(str(self.main), starts[1])
+        self.assertIn("up", starts[1])
+        self.assertIn(str(self.addons), starts[2])
+        self.assertEqual(starts[2][-4:], ["pull", "--policy", "missing", "matter-server"])
+        self.assertIn(str(self.addons), starts[3])
+        self.assertIn("up", starts[3])
 
     def test_refusal_empty_input_eof_and_other_words_never_stop_services(self):
         for answer in ("no\n", "\n", "", "да\n", "YES\n"):

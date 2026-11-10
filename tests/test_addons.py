@@ -212,14 +212,20 @@ while True:
         self.assertIn("Unknown profile", self.addon("apply", success=False).stderr)
         self.assertFalse(self.mutations())
 
-    def test_start_and_repeated_apply_do_not_remove_selected_services(self):
-        self.select(ADDON_NAMES)
+    def test_start_pulls_missing_and_apply_refreshes_selected_services(self):
+        self.select(("hass-configurator",))
         self.addon("apply")
         self.log.write_text("")
         self.addon("start")
-        self.assertFalse(any("pull" in c for c in self.commands() if c[0] == "compose"))
+        pulls = [c for c in self.commands() if c[0] == "compose" and "pull" in c]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0][-4:], ["pull", "--policy", "missing", "hass-configurator"])
         self.assertFalse(any(c[0] in ("stop", "rm") for c in self.commands()))
+        self.log.write_text("")
         self.addon("apply")
+        pulls = [c for c in self.commands() if c[0] == "compose" and "pull" in c]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0][-4:], ["pull", "--policy", "always", "hass-configurator"])
         self.assertFalse(any(c[0] in ("stop", "rm") for c in self.commands()))
 
     def test_foreign_container_is_not_adopted_or_removed(self):
@@ -239,10 +245,12 @@ while True:
         self.addon("apply")
         state = self.state.read_text()
         self.select(("hass-configurator",))
-        self.log.write_text("")
-        self.addon("apply", success=False, env=dict(self.env, FAKE_FAIL_PULL="1"))
-        self.assertEqual(self.state.read_text(), state)
-        self.assertFalse(any(c[0] in ("stop", "rm") or "up" in c for c in self.commands()))
+        for action in ("apply", "start"):
+            with self.subTest(action=action):
+                self.log.write_text("")
+                self.addon(action, success=False, env=dict(self.env, FAKE_FAIL_PULL="1"))
+                self.assertEqual(self.state.read_text(), state)
+                self.assertFalse(any(c[0] in ("stop", "rm") or "up" in c for c in self.commands()))
 
     def test_check_is_read_only_and_reports_inactive_container(self):
         self.select(("zigbee2mqtt",))
@@ -327,7 +335,10 @@ while True:
             self.assertEqual(self.managed(), set(profiles))
             self.assertTrue(all(c["State"]["Running"] for c in json.loads(self.state.read_text()).values()))
             commands = self.commands()
-            self.assertFalse(any("pull" in c for c in commands if c[0] == "compose"))
+            pulls = [c for c in commands if c[0] == "compose" and "pull" in c]
+            self.assertEqual(len(pulls), 2)
+            self.assertEqual(pulls[0][-3:], ["pull", "--policy", "missing"])
+            self.assertEqual(pulls[1][-4:], ["pull", "--policy", "missing", "matter-server"])
             starts = [c for c in commands if c[0] == "compose" and "up" in c]
             self.assertNotIn("--project-name", starts[0])  # Main stack starts before addons.
             if profiles:
@@ -391,7 +402,9 @@ while True:
         self.assertIn(str(self.main), starts[0])
         self.assertIn(str(self.addons), starts[1])
         self.assertIn(str(self.root / "tools/portainer"), starts[2])
-        self.assertFalse(any("pull" in c for c in self.commands() if c[0] == "compose"))
+        pulls = [c for c in self.commands() if c[0] == "compose" and "pull" in c]
+        self.assertEqual(len(pulls), 2)
+        self.assertTrue(all(c[c.index("--policy") + 1] == "missing" for c in pulls))
         self.log.write_text("")
         self.command(args[:2] + ["--check"] + args[2:])
         self.assertFalse(self.mutations())

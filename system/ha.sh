@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Control the HA stack and optional addons; image updates are explicit maintenance.
+# Start with missing images and refresh latest; other updates are explicit maintenance.
 set -euo pipefail
 
 usage() {
@@ -45,6 +45,7 @@ fi
 bash "$script_dir/addons.sh" validate "$addons_dir"
 
 start_system() {
+  "${main_compose[@]}" pull --policy missing
   "${main_compose[@]}" up -d --pull never --wait --wait-timeout 60
   bash "$script_dir/addons.sh" start "$addons_dir"
   printf 'HA and selected addons: started\n'
