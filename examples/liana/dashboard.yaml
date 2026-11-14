@@ -1,0 +1,15 @@
+# Вставьте в ручную карточку панели HA. Это не файл пакета.
+type: vertical-stack
+cards:
+  - type: light
+    entity: light.garland1
+    name: Гирлянда Liana
+  - type: entities
+    title: Настройки гирлянды
+    show_header_toggle: false
+    entities:
+      - entity: number.garland1_duration
+        name: Длительность текущего эффекта, с
+  - type: markdown
+    content: |
+      [Веб-интерфейс Liana](http://192.168.50.225/)

@@ -1,0 +1,59 @@
+# Пакет Home Assistant: /config/packages/garland1.yaml.
+# Подключение описано в README.md. Список эффектов соответствует исходникам Liana master.
+# Liana не публикует MQTT-состояние: HA запоминает последние отправленные значения.
+mqtt:
+  light:
+    - name: "Гирлянда"
+      unique_id: liana_garland1_light
+      default_entity_id: light.garland1
+      icon: mdi:string-lights
+      command_topic: homeassistant/garland_control
+      payload_on: "on"
+      payload_off: "off"
+      brightness_command_topic: homeassistant/garland_control
+      brightness_command_template: "brightness={{ value | int }} "
+      brightness_scale: 255
+      effect_command_topic: homeassistant/garland_control
+      effect_command_template: "animation={{ value.split(':', 1)[0] | int }} "
+      effect_list:
+        - "0: Начальная"
+        - "1: Бег"
+        - "2: Пыльца"
+        - "3: Вспышки"
+        - "4: Мерцание"
+        - "5: Звёзды"
+        - "6: Полосы"
+        - "7: Полёт"
+        - "8: Пульс"
+        - "9: Статика"
+        - "100: Магия"
+      # Команда on запускает начальную анимацию. Отправляем её ПЕРЕД
+      # яркостью и выбранным эффектом, чтобы она не сбросила выбор эффекта.
+      on_command_type: first
+      optimistic: true
+      qos: 0
+      retain: false
+      device: &garland1_device
+        identifiers:
+          - liana_garland1
+        name: "Гирлянда"
+        model: Liana
+        configuration_url: "http://192.168.50.225/"
+
+  number:
+    - name: "Длительность текущего эффекта"
+      unique_id: liana_garland1_duration
+      default_entity_id: number.garland1_duration
+      icon: mdi:timer-outline
+      command_topic: homeassistant/garland_control
+      command_template: "duration={{ value | int }} "
+      unit_of_measurement: s
+      # Верхняя граница интерфейса примера — одни сутки.
+      min: 0
+      max: 86400
+      step: 1
+      mode: box
+      optimistic: true
+      qos: 0
+      retain: false
+      device: *garland1_device

@@ -301,6 +301,8 @@ Zigbee2MQTT обращается к `mqtt://mosquitto:1883` в общей Docker
 
 После подготовки Mosquitto использует `listener 1883`, анонимный доступ отключён. Файл учётных записей — `/mosquitto/config/passwd` внутри контейнера. Порт `9001` проброшен в Compose, но WebSocket listener в шаблоне не настроен.
 
+Для ESP-гирлянды с прошивкой Liana есть [пример MQTT-пакета и карточки HA](examples/liana/README.md): питание, яркость, анимации и длительность текущего эффекта. Рабочий пакет копируется из `examples/liana/` в `homeassistant/config/packages/`.
+
 ### Matter и Bluetooth
 
 Matter Server включается профилем `matter-server` в `addons/.env`, по умолчанию он выключен. Интерфейс Matter, Bluetooth-адаптер, сертификаты и обслуживание описаны в [addons/matter-server/README.md](addons/matter-server/README.md). Данные хранятся в `addons/matter-server/data/`.
