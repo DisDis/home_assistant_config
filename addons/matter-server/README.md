@@ -8,7 +8,7 @@
 
 1. В `addons/.env` задайте `MATTER_PRIMARY_INTERFACE` и `MATTER_BLUETOOTH_ADAPTER`: интерфейс с рабочим IPv6 и индекс адаптера BlueZ (`hci0` → `0`). При необходимости выберите версию или digest в `MATTER_SERVER_IMAGE`; по умолчанию сохранён образ `ghcr.io/home-assistant-libs/python-matter-server:stable`.
 2. Подготовьте сертификаты по [инструкции ниже](#ручная-загрузка-сертификатов-при-недоступности-dcl-из-рф) до первого запуска: обращение к DCL в этом Compose заблокировано.
-3. Добавьте `matter-server` к `COMPOSE_PROFILES` в `addons/.env`. Например, `COMPOSE_PROFILES=matter-server` включает только Matter; `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator,matter-server` — все три дополнения.
+3. Добавьте `matter-server` к `COMPOSE_PROFILES` в `addons/.env`. Например, `COMPOSE_PROFILES=matter-server` включает только Matter; `COMPOSE_PROFILES=matter-server,otbr` — Matter Server и OpenThread Border Router.
 4. После запуска основного стека выполните:
 
    ```bash
@@ -40,7 +40,7 @@ command:
 
 `MATTER_PRIMARY_INTERFACE` выбирает сетевой интерфейс Matter. `MATTER_BLUETOOTH_ADAPTER` задаёт индекс BlueZ: например, `0` соответствует `hci0`; номера зависят от адаптеров хоста. Служба BlueZ работает на хосте; доступ к ней оба контейнера получают через `/run/dbus`. Один адаптер может использоваться Matter Server и интеграцией Bluetooth HA. Дополнительно смонтирован `/dev/bus/usb`.
 
-Контейнеров Thread Border Router / OTBR в текущем Compose нет.
+Для Matter over Thread включите также [OpenThread Border Router](../otbr/README.md), профиль `otbr`, с отдельным адаптером Thread RCP. Matter Server подключается к Thread-устройствам через IPv6-маршруты OTBR на хосте; последовательный порт RCP нужен только OTBR.
 
 ## Включение интеграции Matter
 

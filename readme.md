@@ -19,6 +19,7 @@
 - [Сервисы и связи](#сервисы-и-связи)
   - [Zigbee и MQTT](#zigbee-и-mqtt)
   - [Matter и Bluetooth](#matter-и-bluetooth)
+  - [OpenThread Border Router](#openthread-border-router)
   - [Прямые интеграции HA](#прямые-интеграции-ha)
 - [Хранение данных](#хранение-данных)
 - [Известные особенности текущей конфигурации](#известные-особенности-текущей-конфигурации)
@@ -84,7 +85,7 @@ home_assistant_config/
 
 Основной Compose находится в [homeassistant/docker-compose.yml](homeassistant/docker-compose.yml) внутри клона на сервере. Перед применением изменений проверьте его параметры и локальный `.env`.
 
-Zigbee2MQTT, File Editor и Matter Server вынесены в [addons/](addons/README.md) и по умолчанию отключены. File Editor использует встроенную авторизацию; HTTP-соединение не шифруется. Yandex Smart Home устанавливается [из `integrations/` через симлинк или через HACS](integrations/readme.md). Cloud Commander в стек не входит, Uptime Kuma отключена. Для администрирования предусмотрены Portainer и Cockpit, подробнее в [tools/README.md](tools/README.md).
+Zigbee2MQTT, File Editor, Matter Server и OpenThread Border Router вынесены в [addons/](addons/README.md) и по умолчанию отключены. File Editor использует встроенную авторизацию; HTTP-соединение не шифруется. Yandex Smart Home устанавливается [из `integrations/` через симлинк или через HACS](integrations/readme.md). Cloud Commander в стек не входит, Uptime Kuma отключена. Для администрирования предусмотрены Portainer и Cockpit, подробнее в [tools/README.md](tools/README.md).
 
 ## Установка и настройка Docker
 
@@ -258,7 +259,7 @@ docker compose ps
 
 Home Assistant создаст рабочие файлы в `config/`. Откройте `http://АДРЕС_СЕРВЕРА:8123`, создайте учётную запись и добавьте интеграцию MQTT: брокер `127.0.0.1`, порт `1883`, созданные ранее пользователь и пароль. Mosquitto создаёт общую сеть `ha-backend`.
 
-Контейнерные дополнения по умолчанию выключены. Для Zigbee2MQTT, File Editor или Matter Server создайте отдельный `addons/.env`, выберите профили и выполните [инструкцию дополнений](addons/README.md#применение-и-отключение). Основной Compose больше не запускает эти контейнеры и не скачивает их образы. Для Yandex Smart Home используйте [инструкцию установки](integrations/readme.md).
+Контейнерные дополнения по умолчанию выключены. Для Zigbee2MQTT, File Editor, Matter Server или OTBR создайте отдельный `addons/.env`, выберите профили и выполните [инструкцию дополнений](addons/README.md#применение-и-отключение). Основной Compose больше не запускает эти контейнеры и не скачивает их образы. Для Yandex Smart Home используйте [инструкцию установки](integrations/readme.md).
 
 Перед включением Matter подготовьте сертификаты и параметры сети по [инструкции Matter Server](addons/matter-server/README.md). Без этого дополнения Matter-контейнер не создаётся.
 
@@ -273,6 +274,10 @@ flowchart LR
     HA <-->|"MQTT: 127.0.0.1:1883"| MQTT
     HA <-->|"WebSocket: localhost:5580/ws"| Matter["Matter Server · профиль addons"]
     Matter <-->|"IPv6 / локальная сеть"| MatterDevices["Matter-устройства"]
+    Matter <-->|"IPv6 / маршруты хоста"| OTBR["OpenThread Border Router · профиль addons"]
+    HA <-->|"REST: 127.0.0.1:8081"| OTBR
+    OTBR <-->|"/dev/ttyOTBR"| RCP["SONOFF MG24 · Thread RCP"]
+    RCP <-->|Thread| ThreadDevices["Matter over Thread"]
     HA <-->|"Native API / LAN"| ESP["ESPHome-устройства"]
     HA <-->|"D-Bus / BlueZ"| BT["Bluetooth hci0"]
     Matter <-->|"D-Bus / BlueZ; commissioning"| BT
@@ -287,11 +292,12 @@ flowchart LR
 | `mosquitto` | `eclipse-mosquitto:latest` | Сеть Compose; опубликован TCP `1883`, также проброшен `9001` | MQTT-брокер |
 | `zigbee2mqtt` | `koenkk/zigbee2mqtt:2.14.3` | Общая сеть `ha-backend`; по умолчанию `127.0.0.1:8080` | Необязательный профиль в `addons/`, Zigbee ↔ MQTT |
 | `matter-server` | `ghcr.io/home-assistant-libs/python-matter-server:stable` | `host`, TCP `5580` | Необязательный профиль в `addons/`, Matter-контроллер; [веб-интерфейс](http://192.0.2.10:5580) |
+| `otbr` | `openthread/border-router:sha-783547e` | `host`, REST `127.0.0.1:8081`, веб `127.0.0.1:8082` | Необязательный профиль в `addons/`, маршрутизатор Thread ↔ LAN |
 | `hass-configurator` | `causticlab/hass-configurator-docker:0.6.0` | Сеть дополнений; по умолчанию `127.0.0.1:3218`, авторизация | Необязательный профиль в `addons/`, File Editor для HA |
 
-Основной Compose содержит два сервиса — HA и Mosquitto; Compose дополнений — три необязательных. У всех задано `restart: unless-stopped`. `homeassistant` зависит от запуска `mosquitto` через `depends_on`. Основной стек запускается перед дополнениями и создаёт общую сеть; MQTT-подключение настраивается в Zigbee2MQTT. Скрипт управления не содержит проверок настроек отдельных приложений. Healthcheck приложений в Compose не задан.
+Основной Compose содержит два сервиса — HA и Mosquitto; Compose дополнений — четыре необязательных. У всех задано `restart: unless-stopped`. `homeassistant` зависит от запуска `mosquitto` через `depends_on`. Основной стек запускается перед дополнениями и создаёт общую сеть; MQTT-подключение настраивается в Zigbee2MQTT. Скрипт управления не содержит проверок настроек отдельных приложений. Healthcheck приложений в Compose не задан.
 
-Теги `latest` и `stable` меняются со временем и не фиксируют версии приложений. Для Zigbee2MQTT и File Editor выбраны конкретные версии; у Matter Server сохранён тег `stable`. Образы HA и Mosquitto переопределяются через `HOMEASSISTANT_IMAGE` и `MOSQUITTO_IMAGE` в `homeassistant/.env`, образы дополнений — через `addons/.env`. Порядок смены версий и применения образов приведён в [инструкции обновления](#обновление-версий-ha-mosquitto-и-дополнений). Перед обновлением проверяйте совместимость, примечания к выбранному образу и сохраняйте резервную копию рабочих данных.
+Теги `latest` и `stable` меняются со временем и не фиксируют версии приложений. Для Zigbee2MQTT и File Editor выбраны конкретные версии, для OTBR — тег сборки `sha-783547e`; у Matter Server сохранён тег `stable`. Образы HA и Mosquitto переопределяются через `HOMEASSISTANT_IMAGE` и `MOSQUITTO_IMAGE` в `homeassistant/.env`, образы дополнений — через `addons/.env`. Порядок смены версий и применения образов приведён в [инструкции обновления](#обновление-версий-ha-mosquitto-и-дополнений). Перед обновлением проверяйте совместимость, примечания к выбранному образу и сохраняйте резервную копию рабочих данных.
 
 ### Zigbee и MQTT
 
@@ -308,6 +314,10 @@ Zigbee2MQTT обращается к `mqtt://mosquitto:1883` в общей Docker
 Matter Server включается профилем `matter-server` в `addons/.env`, по умолчанию он выключен. Интерфейс Matter, Bluetooth-адаптер, сертификаты и обслуживание описаны в [addons/matter-server/README.md](addons/matter-server/README.md). Данные хранятся в `addons/matter-server/data/`.
 
 HA подключается к `ws://localhost:5580/ws`: оба контейнера используют сеть хоста. Для Matter нужен рабочий IPv6 в локальной сети. Перед первым запуском подготовьте сертификаты по инструкции дополнения, поскольку обращение к DCL в Compose намеренно заблокировано.
+
+### OpenThread Border Router
+
+Профиль `otbr` добавляет маршрутизатор Thread для SONOFF Dongle Plus MG24 с прошивкой OpenThread RCP 2.4.4: UART `460800`, без аппаратного flow control. [Инструкция OTBR](addons/otbr/README.md) описывает выбор `/dev/serial/by-id/...`, подготовку IPv6 и forwarding на Raspberry Pi, подключение интеграций OTBR и Thread в HA. REST API — `http://127.0.0.1:8081`, веб-интерфейс доступен через SSH-туннель на `8082`. Для Matter over Thread включите также `matter-server`. Zigbee требует отдельного координатора.
 
 ### Прямые интеграции HA
 
@@ -330,6 +340,7 @@ HA подключается к `ws://localhost:5580/ws`: оба контейне
 | `homeassistant/mosquitto/data/` | `/mosquitto/data` | Каталог для данных брокера |
 | `homeassistant/mosquitto/log/` | `/mosquitto/log` | Каталог для файловых логов брокера |
 | `addons/matter-server/data/` | `/data` | Активная Matter-сеть: `chip.json`, JSON контроллера, файлы SDK, сертификаты `credentials/` и данные OTA `updates/` |
+| `addons/otbr/data/` | `/data` в OTBR | Dataset и ключи Thread-сети в подкаталоге `thread/` |
 | `backups/` | Не монтируется | Приватные резервные копии Compose и рабочих данных, журналы бэкапов |
 
 HA и Zigbee2MQTT получают часовой пояс хоста через `/etc/localtime`. Учитывайте часовой пояс при сравнении журналов разных сервисов.
@@ -548,7 +559,7 @@ docker compose logs --tail 100 homeassistant mosquitto
 
 #### Контейнерные дополнения
 
-В `addons/.env` измените нужные `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE` или `MATTER_SERVER_IMAGE`: каждое значение содержит полное имя образа с выбранным тегом или digest. Дополнение должно быть включено в `COMPOSE_PROFILES`. Затем выполните:
+В `addons/.env` измените нужные `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE`, `MATTER_SERVER_IMAGE` или `OTBR_IMAGE`: каждое значение содержит полное имя образа с выбранным тегом или digest. Дополнение должно быть включено в `COMPOSE_PROFILES`. Затем выполните:
 
 ```bash
 cd /home/hauser/home_assistant_config
@@ -574,7 +585,7 @@ git pull --ff-only
 
 Если есть локальные изменения отслеживаемых файлов, сначала сохраните и согласуйте их с новой версией; при ошибке `git pull` остановитесь и разберите причину. Не используйте `git reset --hard` или `git clean` для обновления рабочей установки. Локальные `.env`, `homeassistant/config/`, `homeassistant/mosquitto/`, данные дополнений и инструментов, секреты и настройки Cockpit исключены из Git и остаются на сервере. После обновления сверьте свои `.env` с шаблонами и инструкции выбранных дополнений; существующие рабочие файлы не перезаписывайте.
 
-Проверьте серверные `.env`: образы HA и Mosquitto и общая сеть — в `homeassistant/.env`; образы дополнений, профили, параметры Matter, путь Zigbee, адреса дополнений и пароль редактора — в `addons/.env`; адрес инструментов — в их `.env`. Для смены версий используйте [порядок обновления образов](#обновление-версий-ha-mosquitto-и-дополнений). Compose автоматически читает `.env` из каталога проекта; общий `/home/hauser/home_assistant_config/tools/.env` для ручных команд указывайте через `--env-file` либо один раз скопируйте в `portainer/.env`, если его ещё нет. Существующий файл не перезаписывайте.
+Проверьте серверные `.env`: образы HA и Mosquitto и общая сеть — в `homeassistant/.env`; образы дополнений, профили, параметры Matter и OTBR, пути Zigbee и Thread, адреса дополнений и пароль редактора — в `addons/.env`; адрес инструментов — в их `.env`. Для смены версий используйте [порядок обновления образов](#обновление-версий-ha-mosquitto-и-дополнений). Compose автоматически читает `.env` из каталога проекта; общий `/home/hauser/home_assistant_config/tools/.env` для ручных команд указывайте через `--env-file` либо один раз скопируйте в `portainer/.env`, если его ещё нет. Существующий файл не перезаписывайте.
 
 В SSH-сеансе проверьте конфигурации и загрузите образы, пока сервисы ещё работают:
 
@@ -603,7 +614,7 @@ bash /home/hauser/home_assistant_config/system/addons.sh apply /home/hauser/home
 bash /home/hauser/home_assistant_config/system/autostart.sh /home/hauser/home_assistant_config/homeassistant /home/hauser/home_assistant_config/tools /home/hauser/home_assistant_config/addons
 ```
 
-Проверьте HA (`8123`), Portainer (`9443/api/status`), MQTT (`1883`). Для включённых дополнений проверьте Matter (`5580`) и настроенные адреса Zigbee2MQTT (по умолчанию `8080`) и File Editor (`3218`, без входа ожидается `401`); отключённые дополнения проверять не нужно. Сверьте журналы с состоянием до обновления и убедитесь, что прежние интеграции и устройства доступны. Данные контейнерных дополнений сохраняются в `addons/*/data/`, данные HA — в основном стеке; для отката после изменения формата данных могут понадобиться и прежние образы, и резервная копия. Старые образы не удаляйте до окончания проверки.
+Проверьте HA (`8123`), Portainer (`9443/api/status`), MQTT (`1883`). Для включённых дополнений проверьте Matter (`5580`), OTBR (`http://127.0.0.1:8081/node/state` на сервере) и настроенные адреса Zigbee2MQTT (по умолчанию `8080`) и File Editor (`3218`, без входа ожидается `401`); отключённые дополнения проверять не нужно. Сверьте журналы с состоянием до обновления и убедитесь, что прежние интеграции и устройства доступны. Данные контейнерных дополнений сохраняются в `addons/*/data/`, данные HA — в основном стеке; для отката после изменения формата данных могут понадобиться и прежние образы, и резервная копия. Старые образы не удаляйте до окончания проверки.
 
 Если менялось размещение проекта, после пересоздания проверьте фактические монтирования каждого включённого контейнера, например:
 

@@ -18,6 +18,10 @@ addons/
     README.md
     data/
       .stub
+  otbr/
+    README.md
+    data/
+      .stub
 ```
 
 Команды ниже выполняются на Raspberry Pi внутри клона `home_assistant_config/`, созданного по [основной инструкции](../readme.md#клонирование-репозитория). Пример корня проекта — `/home/hauser/home_assistant_config`; основной стек находится в `homeassistant/`, дополнения — в `addons/`, скрипты — в корневом `system/`. Для скриптов нужны Bash, Python 3.9+ и Docker Compose v2.27+; Python использует только стандартную библиотеку.
@@ -28,7 +32,7 @@ addons/
 
 ```bash
 cd /home/hauser/home_assistant_config
-mkdir -p addons/zigbee2mqtt/data addons/hass-configurator/data addons/matter-server/data
+mkdir -p addons/zigbee2mqtt/data addons/hass-configurator/data addons/matter-server/data addons/otbr/data
 ```
 
 Рабочее содержимое `data/` исключено из Git; публикуется только пустой `.stub`. На существующей установке используйте свои данные и не проходите первоначальную настройку Zigbee- или Matter-сети повторно.
@@ -53,10 +57,9 @@ bash ../system/addons.sh validate
 | `COMPOSE_PROFILES=zigbee2mqtt` | Zigbee2MQTT |
 | `COMPOSE_PROFILES=hass-configurator` | File Editor |
 | `COMPOSE_PROFILES=matter-server` | Matter Server |
-| `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator` | Zigbee2MQTT и File Editor |
-| `COMPOSE_PROFILES=zigbee2mqtt,matter-server` | Zigbee2MQTT и Matter Server |
-| `COMPOSE_PROFILES=hass-configurator,matter-server` | File Editor и Matter Server |
-| `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator,matter-server` | Все три |
+| `COMPOSE_PROFILES=otbr` | OpenThread Border Router |
+
+Для нескольких дополнений перечислите профили через запятую. Например, `COMPOSE_PROFILES=matter-server,otbr` включает Matter over Thread, а `COMPOSE_PROFILES=zigbee2mqtt,hass-configurator,matter-server,otbr` — все четыре дополнения. Для Zigbee и Thread нужны отдельные радиомодули.
 
 Профили — штатный механизм [Docker Compose](https://docs.docker.com/compose/how-tos/profiles/). Переменные окружения терминала имеют приоритет над `.env`; удалите старый экспорт `COMPOSE_PROFILES` через `unset COMPOSE_PROFILES`, если хотите использовать файл. Скрипт отклоняет неизвестные профили и `*`, чтобы опечатка не оставляла неожиданное состояние.
 
@@ -66,10 +69,13 @@ bash ../system/addons.sh validate
 | `HA_BACKEND_NETWORK` | Имя общей сети; одинаковое в основном стеке и дополнениях, по умолчанию `ha-backend` |
 | `ADDONS_BIND_IP` | Адрес веб-интерфейсов; `127.0.0.1` по умолчанию, для LAN укажите LAN IPv4 сервера |
 | `ZIGBEE2MQTT_PORT`, `HASS_CONFIGURATOR_PORT` | Порты хоста, по умолчанию `8080` и `3218` |
-| `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE`, `MATTER_SERVER_IMAGE` | Образы с выбранными версиями или digest |
+| `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE`, `MATTER_SERVER_IMAGE`, `OTBR_IMAGE` | Образы с выбранными версиями или digest |
 | `ZIGBEE_ADAPTER_PATH` | Путь к координатору на хосте, желательно `/dev/serial/by-id/...`; нужен только Zigbee2MQTT |
 | `HC_USERNAME`, `HC_PASSWORD` | Логин и непустой пароль; нужны только включённому File Editor |
 | `MATTER_PRIMARY_INTERFACE`, `MATTER_BLUETOOTH_ADAPTER` | Интерфейс с IPv6 и индекс BlueZ для Matter; по умолчанию `wlan0`, `0` |
+| `OTBR_ADAPTER_PATH`, `OTBR_RCP_DEVICE` | Путь Thread RCP на хосте и Spinel URL внутри контейнера; MG24 RCP 2.4.4 — `460800` без `uart-flow-control` |
+| `OTBR_INFRA_IF`, `OTBR_THREAD_IF` | LAN-интерфейс с IPv6 и интерфейс Thread; по умолчанию `wlan0`, `wpan0` |
+| `OTBR_REST_PORT`, `OTBR_WEB_PORT`, `OTBR_LOG_LEVEL` | Порты REST API и веб-интерфейса на loopback, уровень журнала; по умолчанию `8081`, `8082`, `6` |
 
 Пароль заключайте в одинарные кавычки, чтобы `$` оставался буквальным символом. Рабочие `.env` и данные не публикуются. Скрипт не исполняет `.env` как shell-код и не выводит пароль. Для выключенного File Editor пароль не требуется; для выключенного Zigbee2MQTT координатор не требуется. Скрипт не знает названий дополнений, не проверяет пароли, координаторы или настройки приложений: пользователь заполняет их по инструкции дополнения, а ошибки обнаруживают Docker и само приложение при запуске.
 
@@ -123,13 +129,19 @@ ssh -L 8080:127.0.0.1:8080 -L 3218:127.0.0.1:3218 hauser@192.0.2.10
 
 По умолчанию профиль выключен. Сервер использует сеть хоста и порт `5580`; `ADDONS_BIND_IP` и переназначение портов веб-интерфейсов на него не действуют. Параметры Matter задаются в `addons/.env`; основной Compose их не использует.
 
+## OpenThread Border Router
+
+[Инструкция OTBR](otbr/README.md) описывает подготовку IPv6 и forwarding на Raspberry Pi, настройку SONOFF Dongle Plus MG24 с OpenThread RCP 2.4.4, включение профиля `otbr` и подключение к HA через `http://127.0.0.1:8081`. Для Matter over Thread включите также `matter-server`; для Zigbee используйте отдельный координатор.
+
+OTBR работает в сети хоста с `NET_ADMIN`, отдельным RCP и `/dev/net/tun`. REST API и веб-интерфейс слушают только loopback на портах `8081` и `8082`; `ADDONS_BIND_IP` на них не влияет. Данные Thread-сети находятся в `addons/otbr/data/` и автоматически входят в отдельный архив `addon-otbr-МЕТКА.tar.gz` общего бэкапа.
+
 ## Обновление и резервное копирование
 
 ### Обновление версий
 
-Шаблон фиксирует Zigbee2MQTT `2.14.3` и File Editor `0.6.0`; существование тегов проверяется по [релизам Zigbee2MQTT](https://github.com/Koenkk/zigbee2mqtt/releases) и [Docker Hub File Editor](https://hub.docker.com/r/causticlab/hass-configurator-docker/tags). Для Matter сохранён прежний образ с тегом `stable`, переопределяемый через `MATTER_SERVER_IMAGE`; этот тег меняется со временем. Версии и digest выбираются в локальном `.env` после проверки совместимости, примечаний к релизу и резервного копирования. `addons.sh apply` скачивает только выбранные дополнения; не используйте `--profile '*' pull` в обслуживании. Ротация Docker-логов настроена на три файла по 10 МБ для каждого дополнения.
+Шаблон фиксирует Zigbee2MQTT `2.14.3`, File Editor `0.6.0` и сборку OTBR `sha-783547e`; существование тегов проверяется по [релизам Zigbee2MQTT](https://github.com/Koenkk/zigbee2mqtt/releases), [Docker Hub File Editor](https://hub.docker.com/r/causticlab/hass-configurator-docker/tags) и [Docker Hub OpenThread](https://hub.docker.com/r/openthread/border-router/tags). Для Matter сохранён прежний образ с тегом `stable`, переопределяемый через `MATTER_SERVER_IMAGE`; этот тег меняется со временем. Версии и digest выбираются в локальном `.env` после проверки совместимости, примечаний к релизу и резервного копирования. `addons.sh apply` скачивает только выбранные дополнения; не используйте `--profile '*' pull` в обслуживании. Ротация Docker-логов настроена на три файла по 10 МБ для каждого дополнения.
 
-Перед сменой версии сделайте резервную копию по инструкции ниже. На конечном устройстве отредактируйте `addons/.env`: измените `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE` и/или `MATTER_SERVER_IMAGE`, указав полное имя образа с нужным тегом или digest. Если переменной ещё нет в рабочем `.env`, добавьте её из `.env.example`; существующий файл сохраняйте. Нужные дополнения должны быть включены в `COMPOSE_PROFILES`.
+Перед сменой версии сделайте резервную копию по инструкции ниже. На конечном устройстве отредактируйте `addons/.env`: измените нужные `ZIGBEE2MQTT_IMAGE`, `HASS_CONFIGURATOR_IMAGE`, `MATTER_SERVER_IMAGE` или `OTBR_IMAGE`, указав полное имя образа с нужным тегом или digest. Если переменной ещё нет в рабочем `.env`, добавьте её из `.env.example`; существующий файл сохраняйте. Нужные дополнения должны быть включены в `COMPOSE_PROFILES`.
 
 ```bash
 cd /home/hauser/home_assistant_config
